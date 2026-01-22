@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ahhoi-eCom Shops - GuV Manager</title>
+  <title>Kunde - GuV Manager</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -12,9 +12,6 @@
   <!-- Firebase -->
   <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
-  
-  <!-- PDF.js für PDF-Analyse -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   
   <style>
     * { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
@@ -27,16 +24,16 @@
     ::-webkit-scrollbar-thumb:hover { background: #64748b; }
     .fade-in { animation: fadeIn 0.2s ease-out; }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
-    .spinner { border: 3px solid #334155; border-top-color: #10b981; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
-    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen">
   <div id="app"></div>
   
-  <!-- Hidden file inputs -->
+  <!-- Hidden file inputs für Browser -->
   <input type="file" id="csvInput" accept=".csv" style="display:none" />
   <input type="file" id="pdfInput" accept=".pdf" style="display:none" />
+  <input type="file" id="paypalCsvInput" accept=".csv" style="display:none" />
+  <input type="file" id="shopifyPdfInput" accept=".pdf" style="display:none" />
   <input type="file" id="backupInput" accept=".json" style="display:none" />
 
   <script>
@@ -66,1131 +63,733 @@
       console.error('Firebase Init Error:', err);
     }
     
-    // PDF.js Worker
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-
-    // ===== KATEGORIEN =====
+    // ===== KONSTANTEN =====
+    const MONTHS = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
+    const VAT_RATE = 0.19;
+    
     const CATEGORIES = {
-      waren: { name: 'Wareneinkauf', icon: '📦' },
-      verpackung: { name: 'Verpackung', icon: '📫' },
-      marketing: { name: 'Marketing', icon: '📣' },
-      software: { name: 'Software & Tools', icon: '💻' },
-      porto: { name: 'Porto & Versand', icon: '🚚' },
-      buero: { name: 'Bürobedarf', icon: '🖊️' },
-      reisen: { name: 'Reisekosten', icon: '✈️' },
-      telefon: { name: 'Telefon & Internet', icon: '📱' },
-      beratung: { name: 'Beratung & Services', icon: '👔' },
-      sonstiges: { name: 'Sonstiges', icon: '📋' }
+      versand: { name: 'Versand & Logistik', color: 'amber', icon: '📦' },
+      zahlungen: { name: 'Zahlungsgebühren', color: 'cyan', icon: '💳' },
+      tools: { name: 'Tools & Software', color: 'purple', icon: '💻' },
+      marketing: { name: 'Marketing', color: 'pink', icon: '📣' },
+      sonstige: { name: 'Sonstige Kosten', color: 'slate', icon: '📋' }
     };
-
-    // ===== APP STATE =====
-    const currentYear = new Date().getFullYear();
+    
+    // Automatische Kategorie-Erkennung basierend auf Lieferantenname
+    const SUPPLIER_CATEGORIES = {
+      'dhl': 'versand', 'dpd': 'versand', 'ups': 'versand', 'hermes': 'versand', 'gls': 'versand',
+      'deutsche post': 'versand', 'fedex': 'versand', 'amazon logistics': 'versand',
+      'sendcloud': 'versand', 'shipcloud': 'versand', 'packlink': 'versand',
+      'shopify': 'tools', 'woocommerce': 'tools', 'magento': 'tools',
+      'klaviyo': 'tools', 'mailchimp': 'tools', 'sendinblue': 'tools', 'brevo': 'tools',
+      'sevdesk': 'tools', 'lexoffice': 'tools', 'billomat': 'tools', 'fastbill': 'tools',
+      'google workspace': 'tools', 'microsoft 365': 'tools', 'notion': 'tools', 'slack': 'tools',
+      'adobe': 'tools', 'canva': 'tools', 'figma': 'tools',
+      'zendesk': 'tools', 'freshdesk': 'tools', 'intercom': 'tools',
+      'stripe': 'zahlungen', 'paypal': 'zahlungen', 'klarna': 'zahlungen', 'mollie': 'zahlungen',
+      'shopify payments': 'zahlungen', 'adyen': 'zahlungen', 'payone': 'zahlungen',
+      'facebook': 'marketing', 'meta': 'marketing', 'instagram': 'marketing',
+      'google ads': 'marketing', 'tiktok': 'marketing', 'pinterest': 'marketing',
+      'telekom': 'sonstige', 'vodafone': 'sonstige', 'o2': 'sonstige',
+      'versicherung': 'sonstige', 'steuerberater': 'sonstige', 'rechtsanwalt': 'sonstige'
+    };
+    
+    function detectCategory(supplierName) {
+      const lower = supplierName.toLowerCase();
+      for (const [keyword, category] of Object.entries(SUPPLIER_CATEGORIES)) {
+        if (lower.includes(keyword)) return category;
+      }
+      return 'sonstige';
+    }
+    
+    // ===== STATE =====
     let state = {
       isLoggedIn: sessionStorage.getItem('loggedIn') === 'true',
       isLoading: true,
-      selectedYear: currentYear,
-      selectedMonth: new Date().getMonth(),
-      showSettings: false,
-      showDashboard: false,
-      expandedProducts: {},
-      pdfAnalyzing: false,
+      years: {},
+      selectedYear: 2026,
+      selectedMonth: 'Januar',
+      activeTab: 'eingabe',
+      apiKey: '',
+      showApiKeyModal: false,
+      showPdfModal: false,
+      showCsvModal: false,
+      showSettingsModal: false,
+      showPaypalHelpModal: false,
+      showShopifyPaymentsHelpModal: false,
+      showExportModal: false,
+      pdfProcessing: false,
       pdfResult: null,
-      pdfSelectedCategory: 'sonstiges',
-      years: {}
+      csvPreview: null,
+      saveStatus: 'saved',
+      productsCollapsed: true,
+      expandedProductId: null,
+      ruecklageShop: 40,
+      ekPresets: {}
     };
-
-    // ===== HELPER FUNCTIONS =====
-    const MONTHS = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
     
-    function formatCurrency(value) {
-      return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(value || 0);
-    }
-    
-    function generateId() {
-      return Date.now().toString(36) + Math.random().toString(36).substr(2);
-    }
-    
-    function getEmptyMonth() {
+    // ===== DATEN STRUKTUREN =====
+    function createDefaultMonthData() {
       return {
-        products: [],
-        costs: [],
-        returns: { amount: 0, count: 0 },
-        notes: ''
+        products: [
+          { id: Date.now(), variante: '', produkt: 'Produkt 1', quantity: 0, vkBrutto: 0, wareneinsatz: 0, retourenAnzahl: 0, retourenBrutto: 0 },
+          { id: Date.now() + 1, variante: '', produkt: 'Produkt 2', quantity: 0, vkBrutto: 0, wareneinsatz: 0, retourenAnzahl: 0, retourenBrutto: 0 },
+          { id: Date.now() + 2, variante: '', produkt: 'Produkt 3', quantity: 0, vkBrutto: 0, wareneinsatz: 0, retourenAnzahl: 0, retourenBrutto: 0 },
+          { id: Date.now() + 3, variante: '', produkt: 'Produkt 4', quantity: 0, vkBrutto: 0, wareneinsatz: 0, retourenAnzahl: 0, retourenBrutto: 0 }
+        ],
+        versandEinnahmen: 0,
+        zahlungsgebuehren: {
+          paypal: 0,
+          shopifyPayments: 0,
+          klarna: 0
+        },
+        costs: []
       };
+    }
+    
+    function createYearData() {
+      const data = {};
+      MONTHS.forEach(m => { data[m] = createDefaultMonthData(); });
+      return data;
     }
     
     function ensureYearExists(year) {
       if (!state.years[year]) {
-        state.years[year] = {};
-        for (let i = 0; i < 12; i++) {
-          state.years[year][i] = getEmptyMonth();
-        }
+        state.years[year] = createYearData();
       }
     }
-
-    // ===== FIREBASE DATA SYNC =====
+    
+    // ===== FIREBASE SYNC =====
     function loadData() {
       if (!dataRef) {
         state.isLoading = false;
-        ensureYearExists(currentYear);
+        ensureYearExists(2026);
         render();
         return;
       }
       
       dataRef.on('value', (snapshot) => {
         const data = snapshot.val();
-        if (data && data.years) {
-          state.years = data.years;
+        if (data) {
+          if (data.years) state.years = data.years;
+          if (data.apiKey) state.apiKey = data.apiKey;
+          if (data.ruecklageShop !== undefined) state.ruecklageShop = data.ruecklageShop;
+          if (data.ekPresets) state.ekPresets = data.ekPresets;
         }
-        ensureYearExists(currentYear);
+        ensureYearExists(2026);
         state.isLoading = false;
         render();
       }, (error) => {
         console.error('Firebase Fehler:', error);
         state.isLoading = false;
-        ensureYearExists(currentYear);
+        ensureYearExists(2026);
         render();
       });
     }
     
     function saveData() {
-      if (!dataRef) return;
-      dataRef.set({ years: state.years, lastUpdated: Date.now() });
-    }
-
-    // ===== CALCULATIONS =====
-    function calculateProductStats(products) {
-      let totalRevenue = 0, totalCost = 0, totalUnits = 0;
-      products.forEach(p => {
-        totalRevenue += p.revenue || 0;
-        totalCost += p.wareneinsatz || 0;
-        totalUnits += p.units || 0;
+      state.saveStatus = 'saving';
+      render();
+      
+      if (!dataRef) {
+        state.saveStatus = 'saved';
+        render();
+        return;
+      }
+      
+      dataRef.set({
+        years: state.years,
+        apiKey: state.apiKey,
+        ruecklageShop: state.ruecklageShop,
+        ekPresets: state.ekPresets,
+        lastUpdated: Date.now()
+      }).then(() => {
+        state.saveStatus = 'saved';
+        render();
+      }).catch(err => {
+        console.error('Speicherfehler:', err);
+        state.saveStatus = 'error';
+        render();
       });
-      return { totalRevenue, totalCost, profit: totalRevenue - totalCost, totalUnits };
     }
     
-    function calculateMonthStats(monthData) {
-      const productStats = calculateProductStats(monthData.products || []);
-      const totalCosts = (monthData.costs || []).reduce((sum, c) => sum + (c.amount || 0), 0);
-      const returnsAmount = monthData.returns?.amount || 0;
+    // ===== BERECHNUNGEN =====
+    function formatCurrency(value) {
+      return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(value || 0);
+    }
+    
+    function parseGermanNumber(str) {
+      if (!str) return 0;
+      const cleaned = str.replace(/[^\d,.\-]/g, '');
+      if (cleaned.includes(',') && cleaned.includes('.')) {
+        if (cleaned.lastIndexOf(',') > cleaned.lastIndexOf('.')) {
+          return parseFloat(cleaned.replace(/\./g, '').replace(',', '.')) || 0;
+        } else {
+          return parseFloat(cleaned.replace(/,/g, '')) || 0;
+        }
+      } else if (cleaned.includes(',')) {
+        return parseFloat(cleaned.replace(',', '.')) || 0;
+      }
+      return parseFloat(cleaned) || 0;
+    }
+    
+    function calcProductNettoAnzahl(p) {
+      return (p.quantity || 0) - (p.retourenAnzahl || 0);
+    }
+    
+    function calcMonthData(monthData) {
+      const products = monthData.products || [];
+      const costs = monthData.costs || [];
+      const zahlungsgebuehren = monthData.zahlungsgebuehren || { paypal: 0, shopifyPayments: 0, klarna: 0 };
+      
+      let umsatzBrutto = 0;
+      let wareneinsatz = 0;
+      let retourenAnzahlGesamt = 0;
+      let retourenBruttoGesamt = 0;
+      
+      products.forEach(p => {
+        umsatzBrutto += p.vkBrutto || 0;
+        wareneinsatz += p.wareneinsatz || 0;
+        retourenAnzahlGesamt += p.retourenAnzahl || 0;
+        retourenBruttoGesamt += p.retourenBrutto || 0;
+      });
+      
+      // Umsatz nach Retouren
+      const umsatzBruttoNachRetouren = umsatzBrutto - retourenBruttoGesamt;
+      const umsatzNetto = umsatzBruttoNachRetouren / (1 + VAT_RATE);
+      
+      // Versand
+      const versandNetto = (monthData.versandEinnahmen || 0) / (1 + VAT_RATE);
+      
+      // Zahlungsgebühren
+      const zahlungsgebuehrenGesamt = (zahlungsgebuehren.paypal || 0) + (zahlungsgebuehren.shopifyPayments || 0) + (zahlungsgebuehren.klarna || 0);
+      
+      // Kosten nach Kategorie
+      const kostenByKategorieBrutto = { versand: 0, zahlungen: zahlungsgebuehrenGesamt, tools: 0, marketing: 0, sonstige: 0 };
+      const kostenByKategorieNetto = { versand: 0, zahlungen: zahlungsgebuehrenGesamt, tools: 0, marketing: 0, sonstige: 0 };
+      
+      costs.forEach(c => {
+        const kat = c.kategorie || 'sonstige';
+        kostenByKategorieBrutto[kat] = (kostenByKategorieBrutto[kat] || 0) + (c.betrag || 0);
+        const netto = (c.betrag || 0) / (1 + VAT_RATE);
+        kostenByKategorieNetto[kat] = (kostenByKategorieNetto[kat] || 0) + netto;
+      });
+      
+      const kostenGesamtBrutto = Object.values(kostenByKategorieBrutto).reduce((a, b) => a + b, 0);
+      const kostenGesamtNetto = Object.values(kostenByKategorieNetto).reduce((a, b) => a + b, 0);
+      
+      // Rohertrag
+      const rohertrag = umsatzNetto - wareneinsatz + versandNetto;
+      
+      // Betriebsergebnis
+      const betriebsergebnis = rohertrag - kostenGesamtNetto;
+      
+      // Rücklage
+      const ruecklage = betriebsergebnis > 0 ? betriebsergebnis * (state.ruecklageShop / 100) : 0;
+      const verfuegbar = betriebsergebnis - ruecklage;
       
       return {
-        ...productStats,
-        totalCosts,
-        returnsAmount,
-        grossProfit: productStats.profit - returnsAmount,
-        netProfit: productStats.profit - returnsAmount - totalCosts
+        umsatzBrutto,
+        umsatzBruttoNachRetouren,
+        umsatzNetto,
+        wareneinsatz,
+        versandNetto,
+        retourenAnzahlGesamt,
+        retourenBruttoGesamt,
+        zahlungsgebuehrenGesamt,
+        kostenByKategorieBrutto,
+        kostenByKategorieNetto,
+        kostenGesamtBrutto,
+        kostenGesamtNetto,
+        rohertrag,
+        betriebsergebnis,
+        ruecklage,
+        verfuegbar
       };
     }
     
-    function calculateYearStats(yearData) {
-      let stats = { totalRevenue: 0, totalCost: 0, totalCosts: 0, totalUnits: 0, returnsAmount: 0 };
-      for (let i = 0; i < 12; i++) {
-        const m = yearData[i];
-        if (m) {
-          const ms = calculateMonthStats(m);
-          stats.totalRevenue += ms.totalRevenue;
-          stats.totalCost += ms.totalCost;
-          stats.totalCosts += ms.totalCosts;
-          stats.totalUnits += ms.totalUnits;
-          stats.returnsAmount += ms.returnsAmount;
-        }
-      }
-      stats.profit = stats.totalRevenue - stats.totalCost;
-      stats.grossProfit = stats.profit - stats.returnsAmount;
-      stats.netProfit = stats.grossProfit - stats.totalCosts;
-      return stats;
-    }
-
-    // ===== PRODUCT FUNCTIONS =====
+    // ===== PRODUKT FUNKTIONEN =====
     function addProduct() {
-      ensureYearExists(state.selectedYear);
-      const monthData = state.years[state.selectedYear][state.selectedMonth];
-      monthData.products.push({
-        id: generateId(),
+      const monthData = state.years[state.selectedYear]?.[state.selectedMonth] || createDefaultMonthData();
+      monthData.products.push({ 
+        id: Date.now(), 
         variante: '',
-        produkt: '',
-        revenue: 0,
-        units: 0,
-        wareneinsatz: 0
+        produkt: `Produkt ${monthData.products.length + 1}`, 
+        quantity: 0, 
+        vkBrutto: 0, 
+        wareneinsatz: 0,
+        retourenAnzahl: 0,
+        retourenBrutto: 0
       });
+      state.years[state.selectedYear][state.selectedMonth] = monthData;
       saveData();
-      render();
+    }
+    
+    function removeProduct(id) {
+      const monthData = state.years[state.selectedYear]?.[state.selectedMonth];
+      if (!monthData || monthData.products.length <= 1) return;
+      monthData.products = monthData.products.filter(p => p.id !== id);
+      saveData();
     }
     
     function updateProduct(id, field, value) {
-      const monthData = state.years[state.selectedYear][state.selectedMonth];
+      const monthData = state.years[state.selectedYear]?.[state.selectedMonth];
+      if (!monthData) return;
       const product = monthData.products.find(p => p.id === id);
       if (product) {
-        if (field === 'revenue' || field === 'units' || field === 'wareneinsatz') {
-          product[field] = parseFloat(value) || 0;
-        } else {
-          product[field] = value;
-        }
+        product[field] = (field === 'variante' || field === 'produkt') ? value : parseFloat(value) || 0;
         saveData();
-        render();
       }
     }
     
-    function deleteProduct(id) {
-      const monthData = state.years[state.selectedYear][state.selectedMonth];
-      monthData.products = monthData.products.filter(p => p.id !== id);
-      saveData();
+    function toggleProductExpand(id) {
+      state.expandedProductId = state.expandedProductId === id ? null : id;
       render();
     }
-
-    // ===== COST FUNCTIONS =====
-    function addCost(category = 'sonstiges', description = '', amount = 0) {
-      ensureYearExists(state.selectedYear);
-      const monthData = state.years[state.selectedYear][state.selectedMonth];
-      monthData.costs.push({
-        id: generateId(),
-        category,
-        description,
-        amount,
-        date: new Date().toISOString().split('T')[0]
-      });
+    
+    function updateVersandEinnahmen(value) {
+      const monthData = state.years[state.selectedYear]?.[state.selectedMonth] || createDefaultMonthData();
+      monthData.versandEinnahmen = parseFloat(value) || 0;
+      state.years[state.selectedYear][state.selectedMonth] = monthData;
       saveData();
-      render();
+    }
+    
+    function updateZahlungsgebuehr(anbieter, value) {
+      const monthData = state.years[state.selectedYear]?.[state.selectedMonth] || createDefaultMonthData();
+      if (!monthData.zahlungsgebuehren) {
+        monthData.zahlungsgebuehren = { paypal: 0, shopifyPayments: 0, klarna: 0 };
+      }
+      monthData.zahlungsgebuehren[anbieter] = parseFloat(value) || 0;
+      state.years[state.selectedYear][state.selectedMonth] = monthData;
+      saveData();
+    }
+    
+    // ===== KOSTEN FUNKTIONEN =====
+    function addManualCost(kategorie) {
+      const monthData = state.years[state.selectedYear]?.[state.selectedMonth] || createDefaultMonthData();
+      monthData.costs = [...(monthData.costs || []), {
+        id: Date.now(),
+        name: 'Neue Position',
+        kategorie: kategorie,
+        betrag: 0,
+        datum: new Date().toISOString().split('T')[0],
+        mwst: 0,
+        notiz: ''
+      }];
+      state.years[state.selectedYear][state.selectedMonth] = monthData;
+      saveData();
     }
     
     function updateCost(id, field, value) {
-      const monthData = state.years[state.selectedYear][state.selectedMonth];
+      const monthData = state.years[state.selectedYear]?.[state.selectedMonth];
+      if (!monthData) return;
       const cost = monthData.costs.find(c => c.id === id);
       if (cost) {
-        cost[field] = field === 'amount' ? (parseFloat(value) || 0) : value;
+        cost[field] = (field === 'name' || field === 'kategorie' || field === 'notiz' || field === 'datum') ? value : parseFloat(value) || 0;
         saveData();
-        render();
       }
     }
     
-    function deleteCost(id) {
-      const monthData = state.years[state.selectedYear][state.selectedMonth];
+    function removeCost(id) {
+      const monthData = state.years[state.selectedYear]?.[state.selectedMonth];
+      if (!monthData) return;
       monthData.costs = monthData.costs.filter(c => c.id !== id);
       saveData();
-      render();
-    }
-
-    // ===== RETURNS =====
-    function updateReturns(field, value) {
-      const monthData = state.years[state.selectedYear][state.selectedMonth];
-      monthData.returns[field] = parseFloat(value) || 0;
-      saveData();
-      render();
-    }
-
-    // ===== CSV IMPORT =====
-    function parseCSV(text) {
-      const lines = text.trim().split('\n');
-      const headers = lines[0].split(';').map(h => h.trim().replace(/^"|"$/g, ''));
-      
-      return lines.slice(1).map(line => {
-        const values = [];
-        let current = '';
-        let inQuotes = false;
-        
-        for (let char of line) {
-          if (char === '"') {
-            inQuotes = !inQuotes;
-          } else if (char === ';' && !inQuotes) {
-            values.push(current.trim());
-            current = '';
-          } else {
-            current += char;
-          }
-        }
-        values.push(current.trim());
-        
-        const row = {};
-        headers.forEach((h, i) => {
-          row[h] = values[i] || '';
-        });
-        return row;
-      });
     }
     
-    function importCSV(file) {
+    // ===== JAHR FUNKTIONEN =====
+    function addYear() {
+      const years = Object.keys(state.years).map(Number);
+      const maxYear = years.length > 0 ? Math.max(...years) : 2025;
+      const newYear = maxYear + 1;
+      state.years[newYear] = createYearData();
+      state.selectedYear = newYear;
+      saveData();
+    }
+    
+    // ===== CSV IMPORT =====
+    function parseCSVLine(line, delimiter) {
+      const result = [];
+      let current = '';
+      let inQuotes = false;
+      
+      for (let i = 0; i < line.length; i++) {
+        const char = line[i];
+        if (char === '"') {
+          inQuotes = !inQuotes;
+        } else if (char === delimiter && !inQuotes) {
+          result.push(current);
+          current = '';
+        } else {
+          current += char;
+        }
+      }
+      result.push(current);
+      return result;
+    }
+    
+    function handleCsvImport() {
+      document.getElementById('csvInput').click();
+    }
+    
+    document.getElementById('csvInput')?.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      
       const reader = new FileReader();
-      reader.onload = (e) => {
+      reader.onload = (event) => {
         try {
-          const rows = parseCSV(e.target.result);
-          ensureYearExists(state.selectedYear);
-          const monthData = state.years[state.selectedYear][state.selectedMonth];
+          const csvContent = event.target.result;
+          const lines = csvContent.split('\n').filter(l => l.trim());
+          const delimiter = lines[0].includes(';') ? ';' : ',';
           
-          rows.forEach(row => {
-            // Spalten: Variantentitel, Produkttitel, Gesamtumsatz, Netto verkaufte Artikel, Kosten der verkauften Waren
-            let variante = row['Variantentitel'] || row['Variante'] || '';
-            let produkt = row['Produkttitel'] || row['Produkt'] || row['Titel'] || '';
+          const headers = parseCSVLine(lines[0], delimiter).map(h => h.toLowerCase().trim());
+          
+          const variantenIdx = headers.findIndex(h => h.includes('variantentitel') || h.includes('variant title') || h.includes('variante'));
+          const produktIdx = headers.findIndex(h => h.includes('produkttitel') || h.includes('product title') || h.includes('produkt'));
+          const umsatzIdx = headers.findIndex(h => h.includes('gesamtumsatz') || h.includes('total sales') || h.includes('umsatz'));
+          const mengeIdx = headers.findIndex(h => h.includes('netto verkaufte artikel') || h.includes('verkaufte einheiten') || h.includes('units sold') || h.includes('menge') || h.includes('anzahl'));
+          const wareneinsatzIdx = headers.findIndex(h => h.includes('kosten der verkauften waren') || h.includes('cost of goods') || h.includes('wareneinsatz'));
+          
+          if (umsatzIdx === -1) {
+            alert('CSV-Format nicht erkannt. Benötigte Spalte: "Gesamtumsatz" oder "Total Sales"');
+            return;
+          }
+          
+          const products = [];
+          for (let i = 1; i < lines.length; i++) {
+            const cols = parseCSVLine(lines[i], delimiter);
+            if (cols.length <= umsatzIdx) continue;
             
-            // Default Title durch Produkttitel ersetzen
-            if (variante === 'Default Title' && produkt) {
+            let variante = variantenIdx >= 0 ? cols[variantenIdx]?.trim() : '';
+            const produkt = produktIdx >= 0 ? cols[produktIdx]?.trim() : '';
+            const umsatzRaw = cols[umsatzIdx]?.trim() || '0';
+            const mengeRaw = mengeIdx >= 0 ? cols[mengeIdx]?.trim() : '1';
+            const wareneinsatzRaw = wareneinsatzIdx >= 0 ? cols[wareneinsatzIdx]?.trim() : '0';
+            
+            if (variante.toLowerCase() === 'default title') {
               variante = produkt;
             }
             
-            const revenueStr = row['Gesamtumsatz'] || row['Umsatz'] || row['Bruttoumsatz'] || '0';
-            const revenue = parseFloat(revenueStr.replace(/[^\d,.-]/g, '').replace(',', '.')) || 0;
+            const umsatz = parseGermanNumber(umsatzRaw);
+            const menge = parseInt(mengeRaw.replace(/[^\d-]/g, '')) || 0;
+            const wareneinsatz = parseGermanNumber(wareneinsatzRaw);
             
-            const unitsStr = row['Netto verkaufte Artikel'] || row['Menge'] || row['Anzahl'] || '0';
-            const units = parseInt(unitsStr) || 0;
-            
-            const wareneinsatzStr = row['Kosten der verkauften Waren'] || row['Wareneinsatz'] || '0';
-            const wareneinsatz = Math.abs(parseFloat(wareneinsatzStr.replace(/[^\d,.-]/g, '').replace(',', '.')) || 0);
-            
-            if ((variante || produkt) && (revenue > 0 || units > 0)) {
-              monthData.products.push({
-                id: generateId(),
-                variante,
-                produkt,
-                revenue,
-                units,
-                wareneinsatz
+            if (umsatz > 0 || variante || produkt) {
+              products.push({
+                id: Date.now() + i,
+                variante: variante,
+                produkt: produkt,
+                quantity: menge,
+                vkBrutto: umsatz,
+                wareneinsatz: Math.abs(wareneinsatz),
+                umsatzBrutto: umsatz,
+                retourenAnzahl: 0,
+                retourenBrutto: 0
               });
             }
-          });
+          }
           
-          saveData();
+          products.sort((a, b) => b.umsatzBrutto - a.umsatzBrutto);
+          
+          state.csvPreview = products;
+          state.showCsvModal = true;
           render();
-          alert(`${rows.length} Produkte importiert!`);
+          
         } catch (err) {
-          alert('Fehler beim Import: ' + err.message);
+          alert('Fehler beim Lesen der CSV: ' + err.message);
         }
       };
       reader.readAsText(file);
+      e.target.value = '';
+    });
+    
+    function applyCsvImport() {
+      if (!state.csvPreview) return;
+      
+      const monthData = state.years[state.selectedYear]?.[state.selectedMonth] || createDefaultMonthData();
+      monthData.products = state.csvPreview.map(p => ({
+        id: p.id,
+        variante: p.variante,
+        produkt: p.produkt,
+        quantity: p.quantity,
+        vkBrutto: p.vkBrutto,
+        wareneinsatz: p.wareneinsatz,
+        retourenAnzahl: 0,
+        retourenBrutto: 0
+      }));
+      
+      state.years[state.selectedYear][state.selectedMonth] = monthData;
+      state.showCsvModal = false;
+      state.csvPreview = null;
+      saveData();
     }
-
-    // ===== PDF ANALYSIS =====
-    async function analyzePDF(file) {
-      state.pdfAnalyzing = true;
-      state.pdfResult = null;
+    
+    // ===== PDF IMPORT =====
+    function handlePdfUpload() {
+      if (!state.apiKey) {
+        state.showApiKeyModal = true;
+        render();
+        return;
+      }
+      document.getElementById('pdfInput').click();
+    }
+    
+    document.getElementById('pdfInput')?.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      
+      state.pdfProcessing = true;
+      state.showPdfModal = true;
       render();
       
       try {
-        const arrayBuffer = await file.arrayBuffer();
-        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-        let fullText = '';
+        const base64 = await fileToBase64(file);
         
-        for (let i = 1; i <= pdf.numPages; i++) {
-          const page = await pdf.getPage(i);
-          const textContent = await page.getTextContent();
-          fullText += textContent.items.map(item => item.str).join(' ') + '\n';
+        const response = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': state.apiKey,
+            'anthropic-version': '2023-06-01',
+            'anthropic-dangerous-direct-browser-access': 'true'
+          },
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-20250514',
+            max_tokens: 1000,
+            messages: [{
+              role: 'user',
+              content: [
+                {
+                  type: 'document',
+                  source: { type: 'base64', media_type: 'application/pdf', data: base64 }
+                },
+                {
+                  type: 'text',
+                  text: `Analysiere diese Rechnung und extrahiere die folgenden Informationen im JSON-Format:
+{
+  "lieferant": "Exakter Name des Lieferanten/Unternehmens von der Rechnung",
+  "datum": "Rechnungsdatum im Format YYYY-MM-DD",
+  "brutto": Bruttobetrag als Zahl,
+  "netto": Nettobetrag als Zahl,
+  "mwst": MwSt-Betrag als Zahl (0 falls keine MwSt ausgewiesen),
+  "waehrung": "Währungscode (EUR, USD, GBP, CHF etc.)",
+  "beschreibung": "Kurze Beschreibung der Leistung/Produkte"
+}
+WICHTIG: Gib NUR das JSON zurück, keine Erklärungen.`
+                }
+              ]
+            }]
+          })
+        });
+        
+        const data = await response.json();
+        
+        if (data.error) {
+          throw new Error(data.error.message || 'API Fehler');
         }
         
-        // Betrag extrahieren
-        const amountPatterns = [
-          /(?:Gesamt|Total|Summe|Betrag|Rechnungsbetrag|Amount)[\s:]*(?:€|EUR|USD|\$)?\s*([\d.,]+)/i,
-          /(?:€|EUR)\s*([\d.,]+)/i,
-          /(\$|USD)\s*([\d.,]+)/i,
-          /([\d.,]+)\s*(?:€|EUR)/i
-        ];
+        const text = data.content?.map(c => c.text || '').join('') || '';
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
         
-        let amount = 0;
-        let currency = 'EUR';
-        
-        for (const pattern of amountPatterns) {
-          const match = fullText.match(pattern);
-          if (match) {
-            const numStr = match[1] || match[2];
-            amount = parseFloat(numStr.replace(/\./g, '').replace(',', '.')) || 0;
-            if (fullText.includes('$') || fullText.includes('USD')) currency = 'USD';
-            break;
-          }
-        }
-        
-        // Währungsumrechnung wenn nötig
-        let exchangeRate = 1;
-        let originalAmount = amount;
-        if (currency !== 'EUR' && amount > 0) {
-          try {
-            const res = await fetch(`https://api.exchangerate-api.com/v4/latest/${currency}`);
-            const data = await res.json();
-            exchangeRate = data.rates.EUR || 1;
-            amount = amount * exchangeRate;
-          } catch (e) {
-            console.log('Wechselkurs nicht verfügbar');
-          }
-        }
-        
-        // Datum extrahieren
-        const datePatterns = [
-          /(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})/,
-          /(\d{4})[./-](\d{1,2})[./-](\d{1,2})/
-        ];
-        
-        let date = new Date().toISOString().split('T')[0];
-        for (const pattern of datePatterns) {
-          const match = fullText.match(pattern);
-          if (match) {
-            if (match[1].length === 4) {
-              date = `${match[1]}-${match[2].padStart(2,'0')}-${match[3].padStart(2,'0')}`;
-            } else {
-              const year = match[3].length === 2 ? '20' + match[3] : match[3];
-              date = `${year}-${match[2].padStart(2,'0')}-${match[1].padStart(2,'0')}`;
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]);
+          parsed.kategorie = detectCategory(parsed.lieferant);
+          parsed.fileName = file.name;
+          parsed.waehrung = parsed.waehrung || 'EUR';
+          
+          // Währungsumrechnung
+          if (parsed.waehrung !== 'EUR') {
+            const rate = await fetchExchangeRate(parsed.waehrung);
+            if (rate) {
+              parsed.exchangeRate = rate;
+              parsed.bruttoOriginal = parsed.brutto;
+              parsed.brutto = Math.round(parsed.brutto * rate * 100) / 100;
             }
-            break;
           }
+          
+          state.pdfResult = parsed;
+        } else {
+          throw new Error('Keine JSON-Daten in der Antwort gefunden');
         }
-        
-        // Lieferant erkennen
-        const knownSuppliers = {
-          'amazon': 'Amazon',
-          'dhl': 'DHL',
-          'hermes': 'Hermes',
-          'ups': 'UPS',
-          'fedex': 'FedEx',
-          'office': 'Office Depot',
-          'staples': 'Staples',
-          'google': 'Google',
-          'meta': 'Meta',
-          'facebook': 'Facebook',
-          'microsoft': 'Microsoft',
-          'adobe': 'Adobe',
-          'canva': 'Canva',
-          'shopify': 'Shopify'
-        };
-        
-        let supplier = 'Unbekannt';
-        const textLower = fullText.toLowerCase();
-        for (const [key, name] of Object.entries(knownSuppliers)) {
-          if (textLower.includes(key)) {
-            supplier = name;
-            break;
-          }
-        }
-        
-        // Kategorie erkennen
-        const categoryKeywords = {
-          waren: ['produkt', 'artikel', 'ware', 'bestellung', 'order'],
-          verpackung: ['verpackung', 'karton', 'packaging', 'box'],
-          marketing: ['marketing', 'werbung', 'ads', 'anzeige', 'kampagne'],
-          software: ['software', 'lizenz', 'subscription', 'saas', 'app'],
-          porto: ['porto', 'versand', 'shipping', 'dhl', 'hermes', 'ups'],
-          buero: ['büro', 'office', 'papier', 'toner', 'drucker'],
-          reisen: ['reise', 'flug', 'hotel', 'bahn', 'travel'],
-          telefon: ['telefon', 'handy', 'internet', 'mobilfunk'],
-          beratung: ['beratung', 'consulting', 'honorar', 'service']
-        };
-        
-        let category = 'sonstiges';
-        for (const [cat, keywords] of Object.entries(categoryKeywords)) {
-          if (keywords.some(kw => textLower.includes(kw))) {
-            category = cat;
-            break;
-          }
-        }
-        
-        state.pdfResult = {
-          lieferant: supplier,
-          kategorie: category,
-          datum: date,
-          brutto: amount,
-          bruttoOriginal: originalAmount,
-          waehrung: currency,
-          exchangeRate: exchangeRate !== 1 ? exchangeRate : null
-        };
-        state.pdfSelectedCategory = category;
-        
       } catch (err) {
         state.pdfResult = { error: err.message };
       }
       
-      state.pdfAnalyzing = false;
+      state.pdfProcessing = false;
       render();
+      e.target.value = '';
+    });
+    
+    async function fetchExchangeRate(currency) {
+      try {
+        const res = await fetch(`https://api.exchangerate-api.com/v4/latest/${currency}`);
+        const data = await res.json();
+        return data.rates?.EUR || null;
+      } catch (e) {
+        return null;
+      }
     }
     
-    function confirmPdfImport() {
+    function fileToBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = reader.result;
+          const base64 = result.split(',')[1];
+          resolve(base64);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+    
+    function applyPdfResult() {
       if (!state.pdfResult || state.pdfResult.error) return;
       
-      addCost(
-        state.pdfSelectedCategory,
-        state.pdfResult.lieferant,
-        state.pdfResult.brutto
-      );
+      const newCost = {
+        id: Date.now(),
+        name: state.pdfResult.lieferant,
+        kategorie: state.pdfResult.kategorie,
+        betrag: state.pdfResult.brutto || 0,
+        datum: state.pdfResult.datum || new Date().toISOString().split('T')[0],
+        mwst: state.pdfResult.mwst || 0,
+        notiz: state.pdfResult.beschreibung || ''
+      };
       
+      const monthData = state.years[state.selectedYear]?.[state.selectedMonth] || createDefaultMonthData();
+      monthData.costs = [...(monthData.costs || []), newCost];
+      state.years[state.selectedYear][state.selectedMonth] = monthData;
+      
+      state.showPdfModal = false;
       state.pdfResult = null;
-      state.pdfSelectedCategory = 'sonstiges';
-      render();
+      saveData();
     }
     
-    function changePdfCategory(cat) {
-      state.pdfSelectedCategory = cat;
-      render();
+    function changePdfKategorie(newKategorie) {
+      if (state.pdfResult) {
+        state.pdfResult.kategorie = newKategorie;
+        render();
+      }
     }
-
+    
+    // ===== PAYPAL CSV =====
+    function handlePaypalCsvImport() {
+      document.getElementById('paypalCsvInput').click();
+    }
+    
+    document.getElementById('paypalCsvInput')?.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        try {
+          const csvContent = event.target.result;
+          const lines = csvContent.split('\n').filter(l => l.trim());
+          const delimiter = lines[0].includes(';') ? ';' : ',';
+          const headers = parseCSVLine(lines[0], delimiter).map(h => h.toLowerCase().trim());
+          
+          const feeIdx = headers.findIndex(h => h.includes('gebühr') || h.includes('fee'));
+          if (feeIdx === -1) {
+            alert('Keine Gebühren-Spalte in der PayPal CSV gefunden');
+            return;
+          }
+          
+          let totalFees = 0;
+          for (let i = 1; i < lines.length; i++) {
+            const cols = parseCSVLine(lines[i], delimiter);
+            if (cols.length <= feeIdx) continue;
+            const feeRaw = cols[feeIdx]?.trim() || '0';
+            const fee = Math.abs(parseGermanNumber(feeRaw));
+            totalFees += fee;
+          }
+          
+          const monthData = state.years[state.selectedYear]?.[state.selectedMonth] || createDefaultMonthData();
+          if (!monthData.zahlungsgebuehren) {
+            monthData.zahlungsgebuehren = { paypal: 0, shopifyPayments: 0, klarna: 0 };
+          }
+          monthData.zahlungsgebuehren.paypal = Math.round(totalFees * 100) / 100;
+          state.years[state.selectedYear][state.selectedMonth] = monthData;
+          
+          saveData();
+          alert(`PayPal Gebühren importiert: ${formatCurrency(totalFees)}`);
+          
+        } catch (err) {
+          alert('Fehler beim Parsen der PayPal CSV: ' + err.message);
+        }
+      };
+      reader.readAsText(file);
+      e.target.value = '';
+    });
+    
     // ===== BACKUP =====
     function exportBackup() {
-      const data = JSON.stringify({ years: state.years, exportDate: new Date().toISOString() }, null, 2);
-      const blob = new Blob([data], { type: 'application/json' });
+      const backup = {
+        version: '1.0',
+        exportDate: new Date().toISOString(),
+        years: state.years,
+        ekPresets: state.ekPresets,
+        ruecklageShop: state.ruecklageShop
+      };
+      
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `guv-backup-${new Date().toISOString().split('T')[0]}.json`;
+      a.download = `GuV_Backup_${new Date().toISOString().split('T')[0]}.json`;
       a.click();
       URL.revokeObjectURL(url);
     }
     
-    function importBackup(file) {
+    function importBackup() {
+      document.getElementById('backupInput').click();
+    }
+    
+    document.getElementById('backupInput')?.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      
       const reader = new FileReader();
-      reader.onload = (e) => {
+      reader.onload = (event) => {
         try {
-          const data = JSON.parse(e.target.result);
-          if (data.years) {
-            state.years = data.years;
-            saveData();
-            render();
-            alert('Backup erfolgreich importiert!');
-          }
+          const backup = JSON.parse(event.target.result);
+          
+          if (backup.years) state.years = backup.years;
+          if (backup.yearsShop) state.years = backup.yearsShop;
+          if (backup.ekPresets) state.ekPresets = backup.ekPresets;
+          if (backup.ruecklageShop !== undefined) state.ruecklageShop = backup.ruecklageShop;
+          
+          saveData();
+          alert('Backup erfolgreich importiert!');
         } catch (err) {
-          alert('Fehler beim Import: ' + err.message);
+          alert('Fehler beim Importieren: ' + err.message);
         }
       };
       reader.readAsText(file);
-    }
-
-    // ===== RENDER FUNCTIONS =====
-    function renderLogin() {
-      return `
-        <div class="min-h-screen flex items-center justify-center p-4">
-          <div class="bg-slate-900 rounded-2xl p-8 max-w-md w-full border border-slate-700 text-center">
-            <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-3xl mx-auto mb-4">
-              🛒
-            </div>
-            <h1 class="text-2xl font-bold mb-2">ahhoi-eCom Shops</h1>
-            <p class="text-slate-400 mb-6">GuV Manager - Bitte Passwort eingeben</p>
-            
-            <input 
-              type="password" 
-              id="passwordInput" 
-              placeholder="Passwort" 
-              class="w-full bg-slate-800 rounded-lg px-4 py-3 text-center text-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 mb-4"
-              onkeypress="if(event.key === 'Enter') checkPassword()"
-            />
-            
-            <button onclick="checkPassword()" class="w-full py-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 transition-colors font-medium text-lg">
-              Anmelden
-            </button>
-          </div>
-        </div>
-      `;
-    }
+      e.target.value = '';
+    });
     
-    function renderLoading() {
-      return `
-        <div class="min-h-screen flex items-center justify-center">
-          <div class="text-center">
-            <div class="spinner mx-auto mb-4"></div>
-            <p class="text-slate-400">Daten werden geladen...</p>
-          </div>
-        </div>
-      `;
-    }
-    
-    function renderHeader() {
-      const yearStats = calculateYearStats(state.years[state.selectedYear] || {});
-      
-      return `
-        <header class="bg-slate-900 border-b border-slate-800 sticky top-0 z-50">
-          <div class="max-w-7xl mx-auto px-4 py-4">
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-4">
-                <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-xl">
-                  🛒
-                </div>
-                <div>
-                  <h1 class="font-bold text-lg">ahhoi-eCom Shops</h1>
-                  <p class="text-sm text-slate-400">GuV Manager</p>
-                </div>
-              </div>
-              
-              <div class="flex items-center gap-3">
-                <select onchange="state.selectedYear = parseInt(this.value); render()" class="bg-slate-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500">
-                  ${[currentYear - 2, currentYear - 1, currentYear, currentYear + 1].map(y => 
-                    `<option value="${y}" ${y === state.selectedYear ? 'selected' : ''}>${y}</option>`
-                  ).join('')}
-                </select>
-                
-                <button onclick="state.showDashboard = !state.showDashboard; render()" class="p-2 rounded-lg ${state.showDashboard ? 'bg-emerald-600' : 'bg-slate-800 hover:bg-slate-700'} transition-colors" title="Dashboard">
-                  📊
-                </button>
-                
-                <button onclick="state.showSettings = !state.showSettings; render()" class="p-2 rounded-lg ${state.showSettings ? 'bg-emerald-600' : 'bg-slate-800 hover:bg-slate-700'} transition-colors" title="Einstellungen">
-                  ⚙️
-                </button>
-              </div>
-            </div>
-            
-            <!-- Year Summary -->
-            <div class="grid grid-cols-4 gap-4 mt-4">
-              <div class="bg-slate-800/50 rounded-xl p-3">
-                <p class="text-xs text-slate-400">Umsatz ${state.selectedYear}</p>
-                <p class="text-lg font-bold text-emerald-400">${formatCurrency(yearStats.totalRevenue)}</p>
-              </div>
-              <div class="bg-slate-800/50 rounded-xl p-3">
-                <p class="text-xs text-slate-400">Wareneinsatz</p>
-                <p class="text-lg font-bold text-amber-400">${formatCurrency(yearStats.totalCost)}</p>
-              </div>
-              <div class="bg-slate-800/50 rounded-xl p-3">
-                <p class="text-xs text-slate-400">Kosten</p>
-                <p class="text-lg font-bold text-red-400">${formatCurrency(yearStats.totalCosts)}</p>
-              </div>
-              <div class="bg-slate-800/50 rounded-xl p-3">
-                <p class="text-xs text-slate-400">Gewinn</p>
-                <p class="text-lg font-bold ${yearStats.netProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}">${formatCurrency(yearStats.netProfit)}</p>
-              </div>
-            </div>
-          </div>
-        </header>
-      `;
-    }
-    
-    function renderMonthTabs() {
-      return `
-        <div class="bg-slate-900/50 border-b border-slate-800">
-          <div class="max-w-7xl mx-auto px-4">
-            <div class="flex gap-1 overflow-x-auto py-2">
-              ${MONTHS.map((month, idx) => {
-                const monthData = state.years[state.selectedYear]?.[idx];
-                const hasData = monthData && (monthData.products?.length > 0 || monthData.costs?.length > 0);
-                return `
-                  <button 
-                    onclick="state.selectedMonth = ${idx}; render()"
-                    class="px-4 py-2 rounded-lg text-sm whitespace-nowrap transition-colors ${
-                      idx === state.selectedMonth 
-                        ? 'bg-emerald-600 text-white' 
-                        : hasData 
-                          ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' 
-                          : 'text-slate-500 hover:bg-slate-800'
-                    }"
-                  >
-                    ${month.substr(0, 3)}
-                  </button>
-                `;
-              }).join('')}
-            </div>
-          </div>
-        </div>
-      `;
-    }
-    
-    function renderProducts(monthData) {
-      const products = monthData.products || [];
-      const stats = calculateProductStats(products);
-      
-      return `
-        <div class="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden">
-          <div class="p-4 border-b border-slate-800 flex items-center justify-between">
-            <div class="flex items-center gap-3">
-              <span class="text-xl">📦</span>
-              <div>
-                <h2 class="font-semibold">Produkte</h2>
-                <p class="text-xs text-slate-400">${products.length} Produkte • ${stats.totalUnits} Stück</p>
-              </div>
-            </div>
-            <div class="flex items-center gap-2">
-              <button onclick="document.getElementById('csvInput').click()" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm transition-colors">
-                📄 CSV Import
-              </button>
-              <button onclick="addProduct()" class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm transition-colors">
-                + Hinzufügen
-              </button>
-            </div>
-          </div>
-          
-          ${products.length === 0 ? `
-            <div class="p-8 text-center text-slate-500">
-              <p class="text-4xl mb-2">📦</p>
-              <p>Keine Produkte vorhanden</p>
-              <p class="text-sm">Klicke auf "CSV Import" oder "Hinzufügen"</p>
-            </div>
-          ` : `
-            <div class="divide-y divide-slate-800">
-              ${products.map(p => {
-                const profit = (p.revenue || 0) - (p.wareneinsatz || 0);
-                const margin = p.revenue > 0 ? (profit / p.revenue * 100) : 0;
-                
-                return `
-                  <div class="p-4 hover:bg-slate-800/30 transition-colors">
-                    <div class="grid grid-cols-12 gap-3 items-center">
-                      <div class="col-span-3">
-                        <input 
-                          type="text" 
-                          value="${p.variante || ''}" 
-                          placeholder="Variante"
-                          onchange="updateProduct('${p.id}', 'variante', this.value)"
-                          class="w-full bg-slate-800 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                        />
-                        <input 
-                          type="text" 
-                          value="${p.produkt || ''}" 
-                          placeholder="Produkt"
-                          onchange="updateProduct('${p.id}', 'produkt', this.value)"
-                          class="w-full bg-slate-800/50 rounded px-3 py-1.5 text-xs text-slate-400 mt-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                        />
-                      </div>
-                      <div class="col-span-2">
-                        <label class="text-xs text-slate-500">Umsatz (€)</label>
-                        <input 
-                          type="number" 
-                          step="0.01"
-                          value="${p.revenue || ''}" 
-                          placeholder="0,00"
-                          onchange="updateProduct('${p.id}', 'revenue', this.value)"
-                          class="w-full bg-slate-800 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                        />
-                      </div>
-                      <div class="col-span-1">
-                        <label class="text-xs text-slate-500">Menge</label>
-                        <input 
-                          type="number" 
-                          value="${p.units || ''}" 
-                          placeholder="0"
-                          onchange="updateProduct('${p.id}', 'units', this.value)"
-                          class="w-full bg-slate-800 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                        />
-                      </div>
-                      <div class="col-span-2">
-                        <label class="text-xs text-slate-500">Wareneinsatz (€)</label>
-                        <input 
-                          type="number" 
-                          step="0.01"
-                          value="${p.wareneinsatz || ''}" 
-                          placeholder="0,00"
-                          onchange="updateProduct('${p.id}', 'wareneinsatz', this.value)"
-                          class="w-full bg-slate-800 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                        />
-                      </div>
-                      <div class="col-span-2 text-right">
-                        <p class="text-xs text-slate-500">Gewinn</p>
-                        <p class="font-medium ${profit >= 0 ? 'text-emerald-400' : 'text-red-400'}">${formatCurrency(profit)}</p>
-                        <p class="text-xs text-slate-500">${margin.toFixed(1)}% Marge</p>
-                      </div>
-                      <div class="col-span-2 text-right">
-                        <button onclick="deleteProduct('${p.id}')" class="p-2 rounded-lg hover:bg-red-500/20 text-red-400 transition-colors">
-                          🗑️
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                `;
-              }).join('')}
-            </div>
-            
-            <!-- Product Summary -->
-            <div class="p-4 bg-slate-800/30 border-t border-slate-800">
-              <div class="grid grid-cols-4 gap-4 text-center">
-                <div>
-                  <p class="text-xs text-slate-400">Umsatz</p>
-                  <p class="font-bold text-emerald-400">${formatCurrency(stats.totalRevenue)}</p>
-                </div>
-                <div>
-                  <p class="text-xs text-slate-400">Wareneinsatz</p>
-                  <p class="font-bold text-amber-400">${formatCurrency(stats.totalCost)}</p>
-                </div>
-                <div>
-                  <p class="text-xs text-slate-400">Rohgewinn</p>
-                  <p class="font-bold ${stats.profit >= 0 ? 'text-emerald-400' : 'text-red-400'}">${formatCurrency(stats.profit)}</p>
-                </div>
-                <div>
-                  <p class="text-xs text-slate-400">Stückzahl</p>
-                  <p class="font-bold">${stats.totalUnits}</p>
-                </div>
-              </div>
-            </div>
-          `}
-        </div>
-      `;
-    }
-    
-    function renderCosts(monthData) {
-      const costs = monthData.costs || [];
-      const totalCosts = costs.reduce((sum, c) => sum + (c.amount || 0), 0);
-      
-      // Group by category
-      const byCategory = {};
-      costs.forEach(c => {
-        if (!byCategory[c.category]) byCategory[c.category] = [];
-        byCategory[c.category].push(c);
-      });
-      
-      return `
-        <div class="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden">
-          <div class="p-4 border-b border-slate-800 flex items-center justify-between">
-            <div class="flex items-center gap-3">
-              <span class="text-xl">💰</span>
-              <div>
-                <h2 class="font-semibold">Kosten</h2>
-                <p class="text-xs text-slate-400">${costs.length} Einträge • ${formatCurrency(totalCosts)}</p>
-              </div>
-            </div>
-            <div class="flex items-center gap-2">
-              <button onclick="document.getElementById('pdfInput').click()" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm transition-colors">
-                📄 PDF Analyse
-              </button>
-              <button onclick="addCost()" class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm transition-colors">
-                + Hinzufügen
-              </button>
-            </div>
-          </div>
-          
-          ${state.pdfAnalyzing ? `
-            <div class="p-8 text-center">
-              <div class="spinner mx-auto mb-4"></div>
-              <p class="text-slate-400">PDF wird analysiert...</p>
-            </div>
-          ` : state.pdfResult ? (state.pdfResult.error ? `
-            <div class="p-4 bg-red-500/10 border-b border-slate-800">
-              <p class="text-red-400">Fehler: ${state.pdfResult.error}</p>
-              <button onclick="state.pdfResult = null; render()" class="text-sm underline mt-2">Schließen</button>
-            </div>
-          ` : `
-            <div class="p-4 bg-emerald-500/10 border-b border-slate-800">
-              <h3 class="font-medium mb-3">PDF Analyse Ergebnis</h3>
-              ${state.pdfResult.waehrung !== 'EUR' && state.pdfResult.exchangeRate ? `
-                <div class="bg-blue-500/20 rounded-lg p-3 mb-3 text-sm">
-                  <span class="text-blue-400">💱 Fremdwährung:</span> 
-                  ${state.pdfResult.bruttoOriginal?.toFixed(2)} ${state.pdfResult.waehrung} → ${formatCurrency(state.pdfResult.brutto)}
-                </div>
-              ` : ''}
-              <div class="grid grid-cols-2 gap-4 mb-4">
-                <div>
-                  <p class="text-xs text-slate-400">Lieferant</p>
-                  <p class="font-medium">${state.pdfResult.lieferant}</p>
-                </div>
-                <div>
-                  <p class="text-xs text-slate-400">Betrag</p>
-                  <p class="font-medium text-emerald-400">${formatCurrency(state.pdfResult.brutto)}</p>
-                </div>
-                <div>
-                  <p class="text-xs text-slate-400">Datum</p>
-                  <p>${state.pdfResult.datum}</p>
-                </div>
-                <div>
-                  <p class="text-xs text-slate-400">Kategorie</p>
-                  <select onchange="changePdfCategory(this.value)" class="bg-slate-800 rounded px-2 py-1 text-sm">
-                    ${Object.entries(CATEGORIES).map(([key, cat]) => 
-                      `<option value="${key}" ${state.pdfSelectedCategory === key ? 'selected' : ''}>${cat.icon} ${cat.name}</option>`
-                    ).join('')}
-                  </select>
-                </div>
-              </div>
-              <div class="flex gap-2">
-                <button onclick="confirmPdfImport()" class="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm">
-                  ✓ Übernehmen
-                </button>
-                <button onclick="state.pdfResult = null; render()" class="px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-sm">
-                  ✕ Abbrechen
-                </button>
-              </div>
-            </div>
-          `) : ''}
-          
-          ${costs.length === 0 ? `
-            <div class="p-8 text-center text-slate-500">
-              <p class="text-4xl mb-2">💰</p>
-              <p>Keine Kosten erfasst</p>
-              <p class="text-sm">Klicke auf "PDF Analyse" oder "Hinzufügen"</p>
-            </div>
-          ` : `
-            <div class="divide-y divide-slate-800">
-              ${Object.entries(byCategory).map(([cat, items]) => {
-                const catInfo = CATEGORIES[cat] || { name: cat, icon: '📋' };
-                const catTotal = items.reduce((sum, c) => sum + (c.amount || 0), 0);
-                
-                return `
-                  <div class="p-4">
-                    <div class="flex items-center justify-between mb-3">
-                      <div class="flex items-center gap-2">
-                        <span>${catInfo.icon}</span>
-                        <span class="font-medium">${catInfo.name}</span>
-                        <span class="text-xs text-slate-500">(${items.length})</span>
-                      </div>
-                      <span class="text-sm text-red-400">${formatCurrency(catTotal)}</span>
-                    </div>
-                    <div class="space-y-2 ml-6">
-                      ${items.map(c => `
-                        <div class="flex items-center gap-3 text-sm">
-                          <input 
-                            type="text" 
-                            value="${c.description || ''}" 
-                            placeholder="Beschreibung"
-                            onchange="updateCost('${c.id}', 'description', this.value)"
-                            class="flex-1 bg-slate-800/50 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                          />
-                          <input 
-                            type="number" 
-                            step="0.01"
-                            value="${c.amount || ''}" 
-                            placeholder="0,00"
-                            onchange="updateCost('${c.id}', 'amount', this.value)"
-                            class="w-24 bg-slate-800/50 rounded px-2 py-1 text-right focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                          />
-                          <span class="text-slate-500">€</span>
-                          <select onchange="updateCost('${c.id}', 'category', this.value)" class="bg-slate-800/50 rounded px-2 py-1 text-xs">
-                            ${Object.entries(CATEGORIES).map(([key, cat]) => 
-                              `<option value="${key}" ${c.category === key ? 'selected' : ''}>${cat.icon}</option>`
-                            ).join('')}
-                          </select>
-                          <button onclick="deleteCost('${c.id}')" class="p-1 hover:bg-red-500/20 rounded text-red-400">🗑️</button>
-                        </div>
-                      `).join('')}
-                    </div>
-                  </div>
-                `;
-              }).join('')}
-            </div>
-          `}
-        </div>
-      `;
-    }
-    
-    function renderReturns(monthData) {
-      const returns = monthData.returns || { amount: 0, count: 0 };
-      
-      return `
-        <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
-          <div class="flex items-center gap-3 mb-4">
-            <span class="text-xl">↩️</span>
-            <h2 class="font-semibold">Retouren</h2>
-          </div>
-          <div class="grid grid-cols-2 gap-4">
-            <div>
-              <label class="text-xs text-slate-400">Betrag (€)</label>
-              <input 
-                type="number" 
-                step="0.01"
-                value="${returns.amount || ''}" 
-                placeholder="0,00"
-                onchange="updateReturns('amount', this.value)"
-                class="w-full bg-slate-800 rounded px-3 py-2 mt-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-              />
-            </div>
-            <div>
-              <label class="text-xs text-slate-400">Anzahl</label>
-              <input 
-                type="number" 
-                value="${returns.count || ''}" 
-                placeholder="0"
-                onchange="updateReturns('count', this.value)"
-                class="w-full bg-slate-800 rounded px-3 py-2 mt-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-              />
-            </div>
-          </div>
-        </div>
-      `;
-    }
-    
-    function renderSummary(monthData) {
-      const stats = calculateMonthStats(monthData);
-      
-      return `
-        <div class="bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl border border-slate-700 p-6">
-          <h2 class="font-semibold mb-4">${MONTHS[state.selectedMonth]} ${state.selectedYear} - Zusammenfassung</h2>
-          
-          <div class="space-y-3">
-            <div class="flex justify-between">
-              <span class="text-slate-400">Umsatz</span>
-              <span class="font-medium text-emerald-400">${formatCurrency(stats.totalRevenue)}</span>
-            </div>
-            <div class="flex justify-between">
-              <span class="text-slate-400">- Wareneinsatz</span>
-              <span class="text-amber-400">${formatCurrency(stats.totalCost)}</span>
-            </div>
-            <div class="flex justify-between">
-              <span class="text-slate-400">- Retouren</span>
-              <span class="text-orange-400">${formatCurrency(stats.returnsAmount)}</span>
-            </div>
-            <div class="border-t border-slate-700 pt-3 flex justify-between">
-              <span class="text-slate-300">= Rohgewinn</span>
-              <span class="font-medium ${stats.grossProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}">${formatCurrency(stats.grossProfit)}</span>
-            </div>
-            <div class="flex justify-between">
-              <span class="text-slate-400">- Kosten</span>
-              <span class="text-red-400">${formatCurrency(stats.totalCosts)}</span>
-            </div>
-            <div class="border-t border-slate-700 pt-3 flex justify-between">
-              <span class="font-semibold">Betriebsergebnis</span>
-              <span class="font-bold text-lg ${stats.netProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}">${formatCurrency(stats.netProfit)}</span>
-            </div>
-          </div>
-        </div>
-      `;
-    }
-    
-    function renderDashboard() {
-      const yearData = state.years[state.selectedYear] || {};
-      const yearStats = calculateYearStats(yearData);
-      
-      // Monthly data for chart
-      const monthlyData = MONTHS.map((month, idx) => {
-        const ms = calculateMonthStats(yearData[idx] || getEmptyMonth());
-        return { month: month.substr(0, 3), ...ms };
-      });
-      
-      // Top products
-      const allProducts = [];
-      for (let i = 0; i < 12; i++) {
-        (yearData[i]?.products || []).forEach(p => {
-          allProducts.push({ ...p, month: MONTHS[i] });
-        });
+    // ===== LOGIN =====
+    function checkPassword() {
+      const input = document.getElementById('passwordInput');
+      if (input.value === APP_PASSWORD) {
+        state.isLoggedIn = true;
+        sessionStorage.setItem('loggedIn', 'true');
+        loadData();
+      } else {
+        alert('Falsches Passwort!');
       }
-      
-      const productStats = {};
-      allProducts.forEach(p => {
-        const key = p.variante || p.produkt || 'Unbekannt';
-        if (!productStats[key]) {
-          productStats[key] = { name: key, revenue: 0, profit: 0, units: 0 };
-        }
-        productStats[key].revenue += p.revenue || 0;
-        productStats[key].profit += (p.revenue || 0) - (p.wareneinsatz || 0);
-        productStats[key].units += p.units || 0;
-      });
-      
-      const topProducts = Object.values(productStats)
-        .sort((a, b) => b.revenue - a.revenue)
-        .slice(0, 10);
-      
-      return `
-        <div class="fixed inset-0 bg-slate-950/90 z-50 overflow-auto">
-          <div class="max-w-6xl mx-auto p-6">
-            <div class="flex items-center justify-between mb-6">
-              <h1 class="text-2xl font-bold">📊 Dashboard ${state.selectedYear}</h1>
-              <button onclick="state.showDashboard = false; render()" class="p-2 rounded-lg bg-slate-800 hover:bg-slate-700">✕</button>
-            </div>
-            
-            <!-- Year Stats -->
-            <div class="grid grid-cols-5 gap-4 mb-6">
-              <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
-                <p class="text-xs text-slate-400">Umsatz</p>
-                <p class="text-2xl font-bold text-emerald-400">${formatCurrency(yearStats.totalRevenue)}</p>
-              </div>
-              <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
-                <p class="text-xs text-slate-400">Wareneinsatz</p>
-                <p class="text-2xl font-bold text-amber-400">${formatCurrency(yearStats.totalCost)}</p>
-              </div>
-              <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
-                <p class="text-xs text-slate-400">Rohgewinn</p>
-                <p class="text-2xl font-bold text-blue-400">${formatCurrency(yearStats.grossProfit)}</p>
-              </div>
-              <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
-                <p class="text-xs text-slate-400">Kosten</p>
-                <p class="text-2xl font-bold text-red-400">${formatCurrency(yearStats.totalCosts)}</p>
-              </div>
-              <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
-                <p class="text-xs text-slate-400">Gewinn</p>
-                <p class="text-2xl font-bold ${yearStats.netProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}">${formatCurrency(yearStats.netProfit)}</p>
-              </div>
-            </div>
-            
-            <!-- Monthly Chart -->
-            <div class="bg-slate-900 rounded-xl p-4 border border-slate-800 mb-6">
-              <h3 class="font-medium mb-4">Monatlicher Verlauf</h3>
-              <div class="h-64 flex items-end gap-2">
-                ${monthlyData.map((m, idx) => {
-                  const maxRevenue = Math.max(...monthlyData.map(d => d.totalRevenue)) || 1;
-                  const height = Math.max((m.totalRevenue / maxRevenue) * 100, 2);
-                  const profitHeight = Math.max((Math.abs(m.netProfit) / maxRevenue) * 100, 2);
-                  
-                  return `
-                    <div class="flex-1 flex flex-col items-center">
-                      <div class="w-full flex gap-0.5 items-end h-48">
-                        <div class="flex-1 bg-emerald-500/50 rounded-t" style="height: ${height}%"></div>
-                        <div class="flex-1 ${m.netProfit >= 0 ? 'bg-blue-500/50' : 'bg-red-500/50'} rounded-t" style="height: ${profitHeight}%"></div>
-                      </div>
-                      <button 
-                        onclick="state.selectedMonth = ${idx}; state.showDashboard = false; render()"
-                        class="text-xs text-slate-400 mt-2 hover:text-emerald-400"
-                      >${m.month}</button>
-                    </div>
-                  `;
-                }).join('')}
-              </div>
-              <div class="flex justify-center gap-6 mt-4 text-xs">
-                <span class="flex items-center gap-1"><span class="w-3 h-3 bg-emerald-500/50 rounded"></span> Umsatz</span>
-                <span class="flex items-center gap-1"><span class="w-3 h-3 bg-blue-500/50 rounded"></span> Gewinn</span>
-                <span class="flex items-center gap-1"><span class="w-3 h-3 bg-red-500/50 rounded"></span> Verlust</span>
-              </div>
-            </div>
-            
-            <!-- Top Products -->
-            <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
-              <h3 class="font-medium mb-4">Top 10 Produkte</h3>
-              ${topProducts.length === 0 ? `
-                <p class="text-slate-500 text-center py-4">Noch keine Produktdaten</p>
-              ` : `
-                <div class="space-y-2">
-                  ${topProducts.map((p, idx) => {
-                    const maxRev = topProducts[0].revenue || 1;
-                    const width = (p.revenue / maxRev) * 100;
-                    
-                    return `
-                      <div class="flex items-center gap-3">
-                        <span class="w-6 text-right text-slate-500">${idx + 1}.</span>
-                        <div class="flex-1">
-                          <div class="flex justify-between text-sm mb-1">
-                            <span class="truncate max-w-xs">${p.name}</span>
-                            <span class="text-emerald-400">${formatCurrency(p.revenue)}</span>
-                          </div>
-                          <div class="h-2 bg-slate-800 rounded-full overflow-hidden">
-                            <div class="h-full bg-emerald-500/50 rounded-full" style="width: ${width}%"></div>
-                          </div>
-                        </div>
-                        <span class="text-xs text-slate-500 w-16 text-right">${p.units} Stk</span>
-                      </div>
-                    `;
-                  }).join('')}
-                </div>
-              `}
-            </div>
-          </div>
-        </div>
-      `;
     }
     
-    function renderSettings() {
-      return `
-        <div class="fixed inset-0 bg-slate-950/90 z-50 flex items-center justify-center p-4">
-          <div class="bg-slate-900 rounded-2xl border border-slate-800 max-w-md w-full p-6">
-            <div class="flex items-center justify-between mb-6">
-              <h2 class="text-xl font-bold">⚙️ Einstellungen</h2>
-              <button onclick="state.showSettings = false; render()" class="p-2 rounded-lg bg-slate-800 hover:bg-slate-700">✕</button>
-            </div>
-            
-            <div class="space-y-4">
-              <div>
-                <h3 class="font-medium mb-2">Backup & Export</h3>
-                <div class="flex gap-2">
-                  <button onclick="exportBackup()" class="flex-1 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm">
-                    💾 Backup erstellen
-                  </button>
-                  <button onclick="document.getElementById('backupInput').click()" class="flex-1 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm">
-                    📥 Backup laden
-                  </button>
-                </div>
-              </div>
-              
-              <div class="pt-4 border-t border-slate-800">
-                <h3 class="font-medium mb-2">Firebase Status</h3>
-                <p class="text-sm ${database ? 'text-emerald-400' : 'text-red-400'}">
-                  ${database ? '✓ Verbunden' : '✕ Nicht verbunden'}
-                </p>
-                ${!database ? `
-                  <p class="text-xs text-slate-500 mt-1">
-                    Firebase Config in der index.html prüfen
-                  </p>
-                ` : ''}
-              </div>
-              
-              <div class="pt-4 border-t border-slate-800">
-                <button onclick="if(confirm('Wirklich abmelden?')) { sessionStorage.clear(); location.reload(); }" class="w-full py-2 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 text-sm">
-                  🚪 Abmelden
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      `;
+    function logout() {
+      if (confirm('Wirklich abmelden?')) {
+        sessionStorage.clear();
+        location.reload();
+      }
     }
-
-    // ===== MAIN RENDER =====
+    
+    // ===== RENDER FUNKTIONEN =====
     function render() {
       if (!state.isLoggedIn) {
         document.getElementById('app').innerHTML = renderLogin();
@@ -1203,65 +802,694 @@
       }
       
       ensureYearExists(state.selectedYear);
-      const monthData = state.years[state.selectedYear][state.selectedMonth];
+      
+      const monthData = state.years[state.selectedYear]?.[state.selectedMonth] || createDefaultMonthData();
+      const calc = calcMonthData(monthData);
+      const yearSummary = MONTHS.map(m => {
+        const data = state.years[state.selectedYear]?.[m] || createDefaultMonthData();
+        return { month: m, ...calcMonthData(data) };
+      });
+      const yearTotals = yearSummary.reduce((acc, m) => ({
+        umsatzBrutto: acc.umsatzBrutto + m.umsatzBrutto,
+        umsatzNetto: acc.umsatzNetto + m.umsatzNetto,
+        kostenGesamtNetto: acc.kostenGesamtNetto + m.kostenGesamtNetto,
+        betriebsergebnis: acc.betriebsergebnis + m.betriebsergebnis,
+      }), { umsatzBrutto: 0, umsatzNetto: 0, kostenGesamtNetto: 0, betriebsergebnis: 0 });
+      
+      const costsByCategory = { versand: [], zahlungen: [], tools: [], marketing: [], sonstige: [] };
+      (monthData.costs || []).forEach(c => {
+        if (costsByCategory[c.kategorie]) {
+          costsByCategory[c.kategorie].push(c);
+        } else {
+          costsByCategory.sonstige.push(c);
+        }
+      });
       
       document.getElementById('app').innerHTML = `
         ${renderHeader()}
-        ${renderMonthTabs()}
         
-        <main class="max-w-7xl mx-auto p-4 space-y-6">
-          <div class="grid grid-cols-3 gap-6">
-            <div class="col-span-2 space-y-6">
-              ${renderProducts(monthData)}
-              ${renderCosts(monthData)}
-            </div>
-            <div class="space-y-6">
-              ${renderSummary(monthData)}
-              ${renderReturns(monthData)}
-            </div>
-          </div>
-        </main>
+        <div class="max-w-7xl mx-auto px-6 py-6">
+          ${renderMonthTabs()}
+          ${renderActionButtons()}
+          ${state.activeTab === 'eingabe' ? renderEingabe(monthData, calc, costsByCategory) : renderUebersicht(yearSummary, yearTotals)}
+        </div>
         
-        ${state.showDashboard ? renderDashboard() : ''}
-        ${state.showSettings ? renderSettings() : ''}
+        ${state.showPdfModal ? renderPdfModal() : ''}
+        ${state.showCsvModal ? renderCsvModal() : ''}
+        ${state.showApiKeyModal ? renderApiKeyModal() : ''}
+        ${state.showSettingsModal ? renderSettingsModal() : ''}
+        ${state.showPaypalHelpModal ? renderPaypalHelpModal() : ''}
       `;
     }
-
-    // ===== INIT =====
-    function checkPassword() {
-      const input = document.getElementById('passwordInput');
-      if (input.value === APP_PASSWORD) {
-        state.isLoggedIn = true;
-        sessionStorage.setItem('loggedIn', 'true');
-        loadData();
-      } else {
-        alert('Falsches Passwort!');
-      }
+    
+    function renderLogin() {
+      return `
+        <div class="min-h-screen flex items-center justify-center p-4">
+          <div class="bg-slate-900 rounded-2xl p-8 max-w-md w-full border border-slate-700 text-center">
+            <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-3xl mx-auto mb-4">🛒</div>
+            <h1 class="text-2xl font-bold mb-2">Kunde - GuV Manager</h1>
+            <p class="text-slate-400 mb-6">Bitte Passwort eingeben</p>
+            <input type="password" id="passwordInput" placeholder="Passwort" class="w-full bg-slate-800 rounded-lg px-4 py-3 text-center text-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 mb-4" onkeypress="if(event.key === 'Enter') checkPassword()" />
+            <button onclick="checkPassword()" class="w-full py-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 transition-colors font-medium text-lg">Anmelden</button>
+          </div>
+        </div>
+      `;
     }
     
-    // File input handlers
-    document.getElementById('csvInput').addEventListener('change', (e) => {
-      if (e.target.files[0]) {
-        importCSV(e.target.files[0]);
-        e.target.value = '';
-      }
-    });
+    function renderLoading() {
+      return `
+        <div class="min-h-screen flex items-center justify-center">
+          <div class="text-center">
+            <div class="w-10 h-10 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+            <p class="text-slate-400">Daten werden geladen...</p>
+          </div>
+        </div>
+      `;
+    }
     
-    document.getElementById('pdfInput').addEventListener('change', (e) => {
-      if (e.target.files[0]) {
-        analyzePDF(e.target.files[0]);
-        e.target.value = '';
-      }
-    });
+    function renderHeader() {
+      return `
+        <header class="bg-slate-900/80 border-b border-slate-800 px-6 py-4 sticky top-0 z-50 backdrop-blur-sm">
+          <div class="max-w-7xl mx-auto flex items-center justify-between">
+            <div class="flex items-center gap-4">
+              <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-xl">🛒</div>
+              <div>
+                <h1 class="text-xl font-semibold tracking-tight">Kunde</h1>
+                <p class="text-xs text-slate-500">Online Shop</p>
+              </div>
+            </div>
+            
+            <div class="flex items-center gap-4">
+              <div class="flex items-center gap-2 bg-slate-800 rounded-lg px-3 py-2">
+                <span class="text-slate-400">📅</span>
+                <select onchange="state.selectedYear = Number(this.value); render();" class="bg-transparent text-sm font-medium focus:outline-none cursor-pointer">
+                  ${Object.keys(state.years).sort().map(y => `<option value="${y}" ${y == state.selectedYear ? 'selected' : ''} class="bg-slate-800">${y}</option>`).join('')}
+                </select>
+                <button onclick="addYear()" class="ml-2 p-1 hover:bg-slate-700 rounded transition-colors" title="Neues Jahr">+</button>
+              </div>
+              
+              <div class="flex items-center gap-2 text-xs">
+                ${state.saveStatus === 'saved' ? '<span class="text-emerald-500">✓</span>' : state.saveStatus === 'saving' ? '<span class="text-amber-500 animate-pulse">●</span>' : '<span class="text-red-500">!</span>'}
+                <span class="text-slate-500">${state.saveStatus === 'saved' ? 'Gespeichert' : state.saveStatus === 'saving' ? 'Speichert...' : 'Fehler'}</span>
+              </div>
+              
+              <button onclick="state.showSettingsModal = true; render();" class="p-2 hover:bg-slate-800 rounded-lg transition-colors" title="Einstellungen">⚙️</button>
+            </div>
+          </div>
+        </header>
+      `;
+    }
     
-    document.getElementById('backupInput').addEventListener('change', (e) => {
-      if (e.target.files[0]) {
-        importBackup(e.target.files[0]);
-        e.target.value = '';
-      }
-    });
+    function renderMonthTabs() {
+      return `
+        <div class="flex gap-1 mb-6 overflow-x-auto pb-2">
+          ${MONTHS.map(m => {
+            const mCalc = calcMonthData(state.years[state.selectedYear]?.[m] || createDefaultMonthData());
+            const hasData = mCalc.umsatzBrutto > 0 || mCalc.kostenGesamtNetto > 0;
+            return `
+              <button onclick="state.selectedMonth = '${m}'; render();" class="px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${state.selectedMonth === m ? 'bg-emerald-600 text-white' : hasData ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' : 'bg-slate-900 text-slate-500 hover:bg-slate-800'}">
+                ${m.slice(0, 3)}
+                ${hasData && state.selectedMonth !== m ? '<span class="ml-1 w-1.5 h-1.5 bg-emerald-500 rounded-full inline-block"></span>' : ''}
+              </button>
+            `;
+          }).join('')}
+        </div>
+      `;
+    }
     
-    // Initial render
+    function renderActionButtons() {
+      return `
+        <div class="flex gap-2 mb-6 flex-wrap">
+          <button onclick="state.activeTab = 'eingabe'; render();" class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${state.activeTab === 'eingabe' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800/50'}">
+            📝 Dateneingabe
+          </button>
+          <button onclick="state.activeTab = 'uebersicht'; render();" class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${state.activeTab === 'uebersicht' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800/50'}">
+            📊 Jahresübersicht
+          </button>
+          
+          <div class="flex-1"></div>
+          
+          <button onclick="handleCsvImport()" class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 hover:bg-blue-500 text-white transition-colors">
+            📊 Shopify CSV
+          </button>
+          <button onclick="handlePdfUpload()" class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-emerald-600 hover:bg-emerald-500 text-white transition-colors">
+            📄 PDF Rechnung
+          </button>
+          <button onclick="exportBackup()" class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-slate-800 text-slate-300 hover:bg-slate-700 transition-colors">
+            💾 Backup
+          </button>
+          <button onclick="importBackup()" class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-slate-800 text-slate-300 hover:bg-slate-700 transition-colors">
+            📂 Restore
+          </button>
+        </div>
+      `;
+    }
+    
+    function renderEingabe(monthData, calc, costsByCategory) {
+      const zahlungsgebuehren = monthData.zahlungsgebuehren || { paypal: 0, shopifyPayments: 0, klarna: 0 };
+      
+      return `
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div class="lg:col-span-2 space-y-6">
+            ${renderProducts(monthData, calc)}
+            ${renderVersandEinnahmen(monthData)}
+            ${renderZahlungsgebuehren(zahlungsgebuehren, calc)}
+            ${renderKostenKategorien(costsByCategory, calc)}
+          </div>
+          
+          <div class="space-y-6">
+            ${renderGuVSummary(calc)}
+          </div>
+        </div>
+      `;
+    }
+    
+    function renderProducts(monthData, calc) {
+      return `
+        <section class="bg-slate-900 rounded-2xl p-6 border border-slate-800">
+          <div class="flex items-center justify-between mb-4 cursor-pointer" onclick="state.productsCollapsed = !state.productsCollapsed; render();">
+            <div class="flex items-center gap-3">
+              <div class="w-8 h-8 rounded-lg bg-blue-500/20 flex items-center justify-center">📦</div>
+              <h2 class="text-lg font-semibold">Produkte & Umsatz</h2>
+              <span class="text-xs text-slate-500">(${monthData.products.length} Produkte)</span>
+              ${calc.retourenAnzahlGesamt > 0 ? `<span class="text-xs text-red-400">(${calc.retourenAnzahlGesamt} Retouren)</span>` : ''}
+            </div>
+            <button onclick="event.stopPropagation(); addProduct()" class="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm bg-blue-600 hover:bg-blue-500 transition-colors">+ Produkt</button>
+          </div>
+          
+          <div class="space-y-2">
+            <div class="grid grid-cols-12 gap-2 text-xs text-slate-500 px-2">
+              <div class="col-span-3">Variante</div>
+              <div class="col-span-3">Produkt</div>
+              <div class="col-span-1 text-right">Anzahl</div>
+              <div class="col-span-2 text-right">Umsatz (brutto)</div>
+              <div class="col-span-2 text-right">Wareneinsatz</div>
+              <div class="col-span-1"></div>
+            </div>
+            
+            ${(state.productsCollapsed ? monthData.products.slice(0, 5) : monthData.products).map(p => {
+              const isExpanded = state.expandedProductId === p.id;
+              return `
+                <div class="bg-slate-800/50 rounded-lg overflow-hidden">
+                  <div class="grid grid-cols-12 gap-2 items-center p-2">
+                    <div class="col-span-3 flex items-center gap-1">
+                      <button onclick="event.stopPropagation(); toggleProductExpand(${p.id})" class="p-1 text-slate-500 hover:text-white transition-colors text-xs">${isExpanded ? '▼' : '▶'}</button>
+                      <input type="text" value="${p.variante || ''}" onchange="updateProduct(${p.id}, 'variante', this.value)" class="flex-1 bg-slate-700 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500" placeholder="Variante" />
+                    </div>
+                    <input type="text" value="${p.produkt || ''}" onchange="updateProduct(${p.id}, 'produkt', this.value)" class="col-span-3 bg-slate-700 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500" placeholder="Produkt" />
+                    <input type="number" value="${p.quantity || ''}" onchange="updateProduct(${p.id}, 'quantity', this.value)" class="col-span-1 bg-slate-700 rounded px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-emerald-500" placeholder="0" />
+                    <input type="number" value="${p.vkBrutto || ''}" onchange="updateProduct(${p.id}, 'vkBrutto', this.value)" class="col-span-2 bg-slate-700 rounded px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-emerald-500" placeholder="0.00" step="0.01" />
+                    <input type="number" value="${p.wareneinsatz || ''}" onchange="updateProduct(${p.id}, 'wareneinsatz', this.value)" class="col-span-2 bg-slate-700 rounded px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-emerald-500" placeholder="0.00" step="0.01" />
+                    <button onclick="removeProduct(${p.id})" class="col-span-1 p-1.5 text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors" ${monthData.products.length <= 1 ? 'disabled' : ''}>🗑️</button>
+                  </div>
+                  
+                  ${isExpanded ? `
+                    <div class="px-4 pb-3 pt-1 bg-slate-800/30 border-t border-slate-700">
+                      <p class="text-xs text-slate-500 mb-2">Retouren für dieses Produkt:</p>
+                      <div class="grid grid-cols-2 gap-4">
+                        <div>
+                          <label class="text-xs text-slate-500">Anzahl Retouren</label>
+                          <input type="number" value="${p.retourenAnzahl || ''}" onchange="updateProduct(${p.id}, 'retourenAnzahl', this.value)" class="w-full bg-slate-700 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-red-500" placeholder="0" />
+                        </div>
+                        <div>
+                          <label class="text-xs text-slate-500">Retouren Betrag (brutto)</label>
+                          <input type="number" value="${p.retourenBrutto || ''}" onchange="updateProduct(${p.id}, 'retourenBrutto', this.value)" class="w-full bg-slate-700 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-red-500" placeholder="0.00" step="0.01" />
+                        </div>
+                      </div>
+                    </div>
+                  ` : ''}
+                </div>
+              `;
+            }).join('')}
+            
+            ${state.productsCollapsed && monthData.products.length > 5 ? `
+              <button onclick="state.productsCollapsed = false; render();" class="w-full py-2 text-sm text-slate-400 hover:text-white transition-colors">
+                + ${monthData.products.length - 5} weitere anzeigen
+              </button>
+            ` : ''}
+            ${!state.productsCollapsed && monthData.products.length > 5 ? `
+              <button onclick="state.productsCollapsed = true; render();" class="w-full py-2 text-sm text-slate-400 hover:text-white transition-colors">
+                Weniger anzeigen
+              </button>
+            ` : ''}
+          </div>
+          
+          <div class="grid grid-cols-4 gap-4 mt-4 pt-4 border-t border-slate-700">
+            <div>
+              <p class="text-xs text-slate-500">Umsatz (brutto)</p>
+              <p class="text-lg font-semibold text-emerald-400">${formatCurrency(calc.umsatzBrutto)}</p>
+            </div>
+            <div>
+              <p class="text-xs text-slate-500">Umsatz (netto)</p>
+              <p class="text-lg font-semibold text-emerald-300">${formatCurrency(calc.umsatzNetto)}</p>
+            </div>
+            <div>
+              <p class="text-xs text-slate-500">Wareneinsatz (netto)</p>
+              <p class="text-lg font-semibold text-amber-400">${formatCurrency(calc.wareneinsatz)}</p>
+            </div>
+            ${calc.retourenBruttoGesamt > 0 ? `
+              <div>
+                <p class="text-xs text-red-400">Retouren (brutto)</p>
+                <p class="text-lg font-semibold text-red-400">-${formatCurrency(calc.retourenBruttoGesamt)}</p>
+              </div>
+            ` : '<div></div>'}
+          </div>
+        </section>
+      `;
+    }
+    
+    function renderVersandEinnahmen(monthData) {
+      return `
+        <section class="bg-slate-900 rounded-2xl p-4 border border-slate-800">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-3">
+              <span class="text-xl">📬</span>
+              <span class="font-medium text-emerald-400">Versandeinnahmen (vom Kunden)</span>
+            </div>
+            <input type="number" value="${monthData.versandEinnahmen || ''}" onchange="updateVersandEinnahmen(this.value)" class="w-32 bg-slate-700 rounded px-3 py-2 text-sm text-right focus:outline-none focus:ring-1 focus:ring-emerald-500" placeholder="0.00" step="0.01" />
+          </div>
+        </section>
+      `;
+    }
+    
+    function renderZahlungsgebuehren(zahlungsgebuehren, calc) {
+      return `
+        <section class="bg-slate-900 rounded-2xl p-6 border border-slate-800">
+          <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-3">
+              <div class="w-8 h-8 rounded-lg bg-cyan-500/20 flex items-center justify-center">💳</div>
+              <h2 class="font-semibold">Zahlungsgebühren</h2>
+            </div>
+          </div>
+          
+          <div class="space-y-3">
+            <div class="flex items-center justify-between bg-slate-800/50 rounded-lg p-3">
+              <div class="flex items-center gap-3">
+                <span class="text-lg">🅿️</span>
+                <span class="font-medium">PayPal</span>
+                <button onclick="state.showPaypalHelpModal = true; render();" class="text-xs text-slate-500 hover:text-cyan-400 transition-colors">ℹ️</button>
+              </div>
+              <div class="flex items-center gap-2">
+                <input type="number" value="${zahlungsgebuehren.paypal || ''}" onchange="updateZahlungsgebuehr('paypal', this.value)" class="w-28 bg-slate-700 rounded px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-cyan-500" placeholder="0.00" step="0.01" />
+                <button onclick="handlePaypalCsvImport()" class="px-2 py-1.5 text-xs bg-cyan-600 hover:bg-cyan-500 rounded transition-colors" title="CSV importieren">📥</button>
+              </div>
+            </div>
+            
+            <div class="flex items-center justify-between bg-slate-800/50 rounded-lg p-3">
+              <div class="flex items-center gap-3">
+                <span class="text-lg">🛍️</span>
+                <span class="font-medium">Shopify Payments</span>
+              </div>
+              <input type="number" value="${zahlungsgebuehren.shopifyPayments || ''}" onchange="updateZahlungsgebuehr('shopifyPayments', this.value)" class="w-28 bg-slate-700 rounded px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-cyan-500" placeholder="0.00" step="0.01" />
+            </div>
+            
+            <div class="flex items-center justify-between bg-slate-800/50 rounded-lg p-3">
+              <div class="flex items-center gap-3">
+                <span class="text-lg">🔷</span>
+                <span class="font-medium">Klarna</span>
+              </div>
+              <input type="number" value="${zahlungsgebuehren.klarna || ''}" onchange="updateZahlungsgebuehr('klarna', this.value)" class="w-28 bg-slate-700 rounded px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-cyan-500" placeholder="0.00" step="0.01" />
+            </div>
+          </div>
+          
+          <div class="mt-3 pt-3 border-t border-slate-700 flex justify-between">
+            <span class="font-medium">Gesamt</span>
+            <span class="font-semibold text-cyan-400">${formatCurrency(calc.zahlungsgebuehrenGesamt)}</span>
+          </div>
+        </section>
+      `;
+    }
+    
+    function renderKostenKategorien(costsByCategory, calc) {
+      const colorClasses = {
+        amber: 'bg-amber-500/20 text-amber-400',
+        purple: 'bg-purple-500/20 text-purple-400',
+        pink: 'bg-pink-500/20 text-pink-400',
+        slate: 'bg-slate-500/20 text-slate-400'
+      };
+      
+      return `
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+          ${Object.entries(CATEGORIES).filter(([key]) => key !== 'zahlungen').map(([key, cat]) => `
+            <section class="bg-slate-900 rounded-2xl p-6 border border-slate-800">
+              <div class="flex items-center justify-between mb-4">
+                <div class="flex items-center gap-3">
+                  <div class="w-8 h-8 rounded-lg ${colorClasses[cat.color]} flex items-center justify-center">${cat.icon}</div>
+                  <h2 class="font-semibold">${cat.name}</h2>
+                </div>
+                <button onclick="addManualCost('${key}')" class="p-1.5 hover:bg-slate-700 rounded transition-colors text-slate-400 hover:text-white" title="Position hinzufügen">+</button>
+              </div>
+              
+              <div class="space-y-2 max-h-64 overflow-y-auto">
+                ${(costsByCategory[key] || []).length === 0 ? '<p class="text-sm text-slate-600 italic">Keine Positionen</p>' : ''}
+                ${(costsByCategory[key] || []).map(c => `
+                  <div class="flex items-center gap-2 bg-slate-800/50 rounded-lg p-2 group">
+                    <input type="text" value="${c.name}" onchange="updateCost(${c.id}, 'name', this.value)" class="flex-1 bg-transparent text-sm focus:outline-none focus:bg-slate-700 rounded px-1" />
+                    <input type="number" value="${c.betrag || ''}" onchange="updateCost(${c.id}, 'betrag', this.value)" class="w-24 bg-slate-700 rounded px-2 py-1 text-sm text-right focus:outline-none focus:ring-1 focus:ring-emerald-500" step="0.01" />
+                    <button onclick="removeCost(${c.id})" class="p-1 text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all">🗑️</button>
+                  </div>
+                `).join('')}
+              </div>
+              
+              <div class="mt-3 pt-3 border-t border-slate-700 flex justify-between text-sm">
+                <span class="text-slate-400">Summe</span>
+                <span class="font-medium">${formatCurrency(calc.kostenByKategorieBrutto[key] || 0)}</span>
+              </div>
+            </section>
+          `).join('')}
+        </div>
+      `;
+    }
+    
+    function renderGuVSummary(calc) {
+      return `
+        <section class="bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-6 border border-slate-700 sticky top-24">
+          <h2 class="text-lg font-semibold mb-4">GuV ${state.selectedMonth} ${state.selectedYear}</h2>
+          
+          <div class="space-y-3 text-sm">
+            <div class="flex justify-between">
+              <span class="text-slate-400">Umsatz (brutto)</span>
+              <span class="font-medium text-emerald-400">${formatCurrency(calc.umsatzBrutto)}</span>
+            </div>
+            ${calc.retourenBruttoGesamt > 0 ? `
+              <div class="flex justify-between">
+                <span class="text-slate-400">- Retouren</span>
+                <span class="text-red-400">-${formatCurrency(calc.retourenBruttoGesamt)}</span>
+              </div>
+            ` : ''}
+            <div class="flex justify-between">
+              <span class="text-slate-400">= Umsatz (netto)</span>
+              <span class="font-medium">${formatCurrency(calc.umsatzNetto)}</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-slate-400">+ Versand (netto)</span>
+              <span class="text-emerald-300">${formatCurrency(calc.versandNetto)}</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-slate-400">- Wareneinsatz</span>
+              <span class="text-amber-400">-${formatCurrency(calc.wareneinsatz)}</span>
+            </div>
+            
+            <div class="border-t border-slate-700 pt-3 flex justify-between">
+              <span class="font-medium">Rohertrag</span>
+              <span class="font-semibold ${calc.rohertrag >= 0 ? 'text-emerald-400' : 'text-red-400'}">${formatCurrency(calc.rohertrag)}</span>
+            </div>
+            
+            <div class="flex justify-between">
+              <span class="text-slate-400">- Kosten gesamt</span>
+              <span class="text-red-400">-${formatCurrency(calc.kostenGesamtNetto)}</span>
+            </div>
+            
+            <div class="border-t border-slate-700 pt-3 flex justify-between">
+              <span class="font-semibold">Betriebsergebnis</span>
+              <span class="font-bold text-lg ${calc.betriebsergebnis >= 0 ? 'text-emerald-400' : 'text-red-400'}">${formatCurrency(calc.betriebsergebnis)}</span>
+            </div>
+            
+            ${calc.betriebsergebnis > 0 ? `
+              <div class="bg-slate-800/50 rounded-lg p-3 mt-4">
+                <div class="flex justify-between text-sm mb-2">
+                  <span class="text-slate-400">Rücklage (${state.ruecklageShop}%)</span>
+                  <span class="text-amber-400">${formatCurrency(calc.ruecklage)}</span>
+                </div>
+                <div class="flex justify-between font-medium">
+                  <span>Verfügbar</span>
+                  <span class="text-emerald-400">${formatCurrency(calc.verfuegbar)}</span>
+                </div>
+              </div>
+            ` : ''}
+          </div>
+        </section>
+      `;
+    }
+    
+    function renderUebersicht(yearSummary, yearTotals) {
+      return `
+        <div class="space-y-6">
+          <div class="grid grid-cols-4 gap-4">
+            <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
+              <p class="text-xs text-slate-500">Jahresumsatz (brutto)</p>
+              <p class="text-2xl font-bold text-emerald-400">${formatCurrency(yearTotals.umsatzBrutto)}</p>
+            </div>
+            <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
+              <p class="text-xs text-slate-500">Jahresumsatz (netto)</p>
+              <p class="text-2xl font-bold text-emerald-300">${formatCurrency(yearTotals.umsatzNetto)}</p>
+            </div>
+            <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
+              <p class="text-xs text-slate-500">Kosten gesamt</p>
+              <p class="text-2xl font-bold text-red-400">${formatCurrency(yearTotals.kostenGesamtNetto)}</p>
+            </div>
+            <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
+              <p class="text-xs text-slate-500">Jahresergebnis</p>
+              <p class="text-2xl font-bold ${yearTotals.betriebsergebnis >= 0 ? 'text-emerald-400' : 'text-red-400'}">${formatCurrency(yearTotals.betriebsergebnis)}</p>
+            </div>
+          </div>
+          
+          <div class="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
+            <table class="w-full text-sm">
+              <thead class="bg-slate-800">
+                <tr>
+                  <th class="text-left py-3 px-4 font-medium">Monat</th>
+                  <th class="text-right py-3 px-4 font-medium">Umsatz (brutto)</th>
+                  <th class="text-right py-3 px-4 font-medium">Umsatz (netto)</th>
+                  <th class="text-right py-3 px-4 font-medium">Kosten</th>
+                  <th class="text-right py-3 px-4 font-medium">Ergebnis</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${yearSummary.map(m => `
+                  <tr class="border-t border-slate-800 hover:bg-slate-800/50 cursor-pointer" onclick="state.selectedMonth = '${m.month}'; state.activeTab = 'eingabe'; render();">
+                    <td class="py-3 px-4 font-medium">${m.month}</td>
+                    <td class="py-3 px-4 text-right text-emerald-400">${formatCurrency(m.umsatzBrutto)}</td>
+                    <td class="py-3 px-4 text-right">${formatCurrency(m.umsatzNetto)}</td>
+                    <td class="py-3 px-4 text-right text-red-400">${formatCurrency(m.kostenGesamtNetto)}</td>
+                    <td class="py-3 px-4 text-right font-medium ${m.betriebsergebnis >= 0 ? 'text-emerald-400' : 'text-red-400'}">${formatCurrency(m.betriebsergebnis)}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+              <tfoot class="bg-slate-800 font-semibold">
+                <tr>
+                  <td class="py-3 px-4">Gesamt</td>
+                  <td class="py-3 px-4 text-right text-emerald-400">${formatCurrency(yearTotals.umsatzBrutto)}</td>
+                  <td class="py-3 px-4 text-right">${formatCurrency(yearTotals.umsatzNetto)}</td>
+                  <td class="py-3 px-4 text-right text-red-400">${formatCurrency(yearTotals.kostenGesamtNetto)}</td>
+                  <td class="py-3 px-4 text-right ${yearTotals.betriebsergebnis >= 0 ? 'text-emerald-400' : 'text-red-400'}">${formatCurrency(yearTotals.betriebsergebnis)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      `;
+    }
+    
+    // ===== MODALS =====
+    function renderPdfModal() {
+      return `
+        <div class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div class="bg-slate-900 rounded-2xl p-6 max-w-lg w-full border border-slate-700 fade-in">
+            <div class="flex justify-between items-center mb-4">
+              <h3 class="text-lg font-semibold">📄 PDF Analyse</h3>
+              <button onclick="state.showPdfModal = false; state.pdfResult = null; render();" class="p-1 hover:bg-slate-800 rounded">✕</button>
+            </div>
+            
+            ${state.pdfProcessing ? `
+              <div class="text-center py-8">
+                <div class="w-10 h-10 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                <p class="text-slate-400">Rechnung wird analysiert...</p>
+              </div>
+            ` : state.pdfResult?.error ? `
+              <div class="bg-red-500/10 border border-red-500/30 rounded-lg p-4 text-red-400">
+                <p class="font-medium">Fehler</p>
+                <p class="text-sm">${state.pdfResult.error}</p>
+              </div>
+            ` : state.pdfResult ? `
+              <div class="space-y-4">
+                ${state.pdfResult.waehrung !== 'EUR' && state.pdfResult.exchangeRate ? `
+                  <div class="bg-blue-500/20 border border-blue-500/30 rounded-lg p-3 text-sm">
+                    <span class="text-blue-400">💱 Fremdwährung:</span> ${state.pdfResult.bruttoOriginal?.toFixed(2)} ${state.pdfResult.waehrung} → ${formatCurrency(state.pdfResult.brutto)}
+                  </div>
+                ` : ''}
+                
+                <div class="grid grid-cols-2 gap-4">
+                  <div>
+                    <p class="text-xs text-slate-500">Lieferant</p>
+                    <p class="font-medium">${state.pdfResult.lieferant}</p>
+                  </div>
+                  <div>
+                    <p class="text-xs text-slate-500">Betrag (brutto)</p>
+                    <p class="font-medium text-emerald-400">${formatCurrency(state.pdfResult.brutto)}</p>
+                  </div>
+                  <div>
+                    <p class="text-xs text-slate-500">Datum</p>
+                    <p>${state.pdfResult.datum}</p>
+                  </div>
+                  <div>
+                    <p class="text-xs text-slate-500">Kategorie</p>
+                    <select onchange="changePdfKategorie(this.value)" class="bg-slate-700 rounded px-2 py-1 text-sm w-full">
+                      ${Object.entries(CATEGORIES).map(([key, cat]) => `<option value="${key}" ${state.pdfResult.kategorie === key ? 'selected' : ''}>${cat.icon} ${cat.name}</option>`).join('')}
+                    </select>
+                  </div>
+                </div>
+                
+                ${state.pdfResult.beschreibung ? `<p class="text-sm text-slate-400">${state.pdfResult.beschreibung}</p>` : ''}
+                
+                <div class="flex gap-3 pt-4">
+                  <button onclick="state.showPdfModal = false; state.pdfResult = null; render();" class="flex-1 py-2 rounded-lg bg-slate-800 hover:bg-slate-700">Abbrechen</button>
+                  <button onclick="applyPdfResult()" class="flex-1 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 font-medium">Übernehmen</button>
+                </div>
+              </div>
+            ` : ''}
+          </div>
+        </div>
+      `;
+    }
+    
+    function renderCsvModal() {
+      const preview = state.csvPreview || [];
+      const totalUmsatz = preview.reduce((s, p) => s + p.umsatzBrutto, 0);
+      const totalWareneinsatz = preview.reduce((s, p) => s + (p.wareneinsatz || 0), 0);
+      
+      return `
+        <div class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div class="bg-slate-900 rounded-2xl p-6 max-w-4xl w-full border border-slate-700 fade-in max-h-[90vh] overflow-hidden flex flex-col">
+            <div class="flex justify-between items-center mb-4">
+              <h3 class="text-lg font-semibold">📊 CSV Import</h3>
+              <button onclick="state.showCsvModal = false; state.csvPreview = null; render();" class="p-1 hover:bg-slate-800 rounded">✕</button>
+            </div>
+            
+            <div class="mb-4 grid grid-cols-3 gap-4">
+              <div class="bg-slate-800 rounded-lg p-3">
+                <p class="text-xs text-slate-500">Produkte</p>
+                <p class="text-lg font-semibold">${preview.length}</p>
+              </div>
+              <div class="bg-slate-800 rounded-lg p-3">
+                <p class="text-xs text-slate-500">Umsatz (brutto)</p>
+                <p class="text-lg font-semibold text-emerald-400">${formatCurrency(totalUmsatz)}</p>
+              </div>
+              <div class="bg-slate-800 rounded-lg p-3">
+                <p class="text-xs text-slate-500">Wareneinsatz</p>
+                <p class="text-lg font-semibold text-amber-400">${formatCurrency(totalWareneinsatz)}</p>
+              </div>
+            </div>
+            
+            <div class="flex-1 overflow-y-auto mb-4 bg-slate-800/50 rounded-lg">
+              <table class="w-full text-sm">
+                <thead class="sticky top-0 bg-slate-800">
+                  <tr class="text-slate-500 text-xs">
+                    <th class="text-left py-2 px-3">#</th>
+                    <th class="text-left py-2 px-3">Variante</th>
+                    <th class="text-left py-2 px-3">Produkt</th>
+                    <th class="text-right py-2 px-3">Anzahl</th>
+                    <th class="text-right py-2 px-3">Umsatz</th>
+                    <th class="text-right py-2 px-3">Wareneinsatz</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${preview.slice(0, 50).map((p, i) => `
+                    <tr class="border-t border-slate-700/50">
+                      <td class="py-2 px-3 text-slate-500">${i + 1}</td>
+                      <td class="py-2 px-3">${p.variante || '-'}</td>
+                      <td class="py-2 px-3">${p.produkt || '-'}</td>
+                      <td class="py-2 px-3 text-right">${p.quantity}</td>
+                      <td class="py-2 px-3 text-right">${formatCurrency(p.umsatzBrutto)}</td>
+                      <td class="py-2 px-3 text-right text-amber-400">${formatCurrency(p.wareneinsatz || 0)}</td>
+                    </tr>
+                  `).join('')}
+                  ${preview.length > 50 ? `<tr><td colspan="6" class="py-2 px-3 text-center text-slate-500">... und ${preview.length - 50} weitere</td></tr>` : ''}
+                </tbody>
+              </table>
+            </div>
+            
+            <div class="flex gap-3">
+              <button onclick="state.showCsvModal = false; state.csvPreview = null; render();" class="flex-1 py-2 rounded-lg bg-slate-800 hover:bg-slate-700">Abbrechen</button>
+              <button onclick="applyCsvImport()" class="flex-1 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 font-medium">Import → ${state.selectedMonth}</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+    
+    function renderApiKeyModal() {
+      return `
+        <div class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div class="bg-slate-900 rounded-2xl p-6 max-w-md w-full border border-slate-700 fade-in">
+            <div class="flex justify-between items-center mb-4">
+              <h3 class="text-lg font-semibold">🔑 API Key erforderlich</h3>
+              <button onclick="state.showApiKeyModal = false; render();" class="p-1 hover:bg-slate-800 rounded">✕</button>
+            </div>
+            
+            <p class="text-slate-400 text-sm mb-4">Für die PDF-Analyse wird ein Anthropic API Key benötigt.</p>
+            
+            <input type="password" id="apiKeyInput" value="${state.apiKey}" placeholder="sk-ant-..." class="w-full bg-slate-800 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500 mb-4" />
+            
+            <p class="text-xs text-slate-600 mb-4">Hol dir einen Key unter <a href="https://console.anthropic.com" target="_blank" class="text-emerald-400 hover:underline">console.anthropic.com</a></p>
+            
+            <button onclick="state.apiKey = document.getElementById('apiKeyInput').value; state.showApiKeyModal = false; saveData();" class="w-full py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 font-medium">Speichern</button>
+          </div>
+        </div>
+      `;
+    }
+    
+    function renderSettingsModal() {
+      return `
+        <div class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div class="bg-slate-900 rounded-2xl p-6 max-w-lg w-full border border-slate-700 fade-in max-h-[90vh] overflow-y-auto">
+            <div class="flex justify-between items-center mb-4">
+              <h3 class="text-lg font-semibold">⚙️ Einstellungen</h3>
+              <button onclick="state.showSettingsModal = false; render();" class="p-1 hover:bg-slate-800 rounded">✕</button>
+            </div>
+            
+            <div class="space-y-6">
+              <div>
+                <label class="block text-sm text-slate-400 mb-2">Anthropic API Key</label>
+                <input type="password" id="settingsApiKey" value="${state.apiKey}" placeholder="sk-ant-..." class="w-full bg-slate-800 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+              </div>
+              
+              <div>
+                <label class="block text-sm text-slate-400 mb-2">Rücklage (%)</label>
+                <input type="number" id="settingsRuecklage" value="${state.ruecklageShop}" class="w-full bg-slate-800 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+              </div>
+              
+              <div>
+                <label class="block text-sm text-slate-400 mb-2">Firebase Status</label>
+                <p class="text-sm ${database ? 'text-emerald-400' : 'text-red-400'}">${database ? '✓ Verbunden' : '✕ Nicht verbunden'}</p>
+              </div>
+              
+              <button onclick="state.apiKey = document.getElementById('settingsApiKey').value; state.ruecklageShop = parseFloat(document.getElementById('settingsRuecklage').value) || 40; state.showSettingsModal = false; saveData();" class="w-full py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 font-medium">Speichern</button>
+              
+              <button onclick="logout()" class="w-full py-2 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400">Abmelden</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+    
+    function renderPaypalHelpModal() {
+      return `
+        <div class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div class="bg-slate-900 rounded-2xl p-6 max-w-lg w-full border border-slate-700 fade-in">
+            <div class="flex justify-between items-center mb-4">
+              <h3 class="text-lg font-semibold">PayPal Gebühren importieren</h3>
+              <button onclick="state.showPaypalHelpModal = false; render();" class="p-1 hover:bg-slate-800 rounded">✕</button>
+            </div>
+            
+            <div class="space-y-4 text-sm text-slate-300">
+              <p>So exportierst du die PayPal-Gebühren:</p>
+              <ol class="list-decimal list-inside space-y-2">
+                <li>Gehe zu PayPal → Berichte → Aktivitäten</li>
+                <li>Wähle den gewünschten Zeitraum</li>
+                <li>Klicke auf "Herunterladen" → CSV</li>
+                <li>Importiere die CSV-Datei hier</li>
+              </ol>
+              <p class="text-slate-500">Die Gebühren werden automatisch aus der "Gebühr"-Spalte summiert.</p>
+            </div>
+            
+            <button onclick="state.showPaypalHelpModal = false; render();" class="w-full mt-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700">Verstanden</button>
+          </div>
+        </div>
+      `;
+    }
+    
+    // ===== INIT =====
     if (state.isLoggedIn) {
       loadData();
     } else {
