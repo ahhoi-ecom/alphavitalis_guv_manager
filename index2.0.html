@@ -1,0 +1,1356 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ahhoi-eCom Shops - GuV Manager</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+  
+  <!-- PDF.js für PDF-Analyse -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  
+  <style>
+    * { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
+    input[type="number"]::-webkit-inner-spin-button,
+    input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    input[type="number"] { -moz-appearance: textfield; }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: #1e293b; }
+    ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+    .fade-in { animation: fadeIn 0.2s ease-out; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+    .spinner { border: 3px solid #334155; border-top-color: #10b981; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .cost-bar { transition: width 0.4s ease-out; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+  <div id="app"></div>
+  
+  <!-- Hidden file inputs -->
+  <input type="file" id="csvInput" accept=".csv" style="display:none" />
+  <input type="file" id="pdfInput" accept=".pdf" style="display:none" />
+  <input type="file" id="backupInput" accept=".json" style="display:none" />
+
+  <script>
+    // ===== FIREBASE CONFIG =====
+    const firebaseConfig = {
+      apiKey: "AIzaSyAwLggvONE9o6oo5i7HHAnHz98YOorrHsc",
+      authDomain: "kunde---guv-rechner.firebaseapp.com",
+      databaseURL: "https://kunde---guv-rechner-default-rtdb.europe-west1.firebasedatabase.app",
+      projectId: "kunde---guv-rechner",
+      storageBucket: "kunde---guv-rechner.firebasestorage.app",
+      messagingSenderId: "856501811925",
+      appId: "1:856501811925:web:c01d2e04ca8d963e71405c"
+    };
+    
+    const APP_PASSWORD = "alphavitalis123!";
+    
+    let database = null;
+    let dataRef = null;
+    
+    try {
+      firebase.initializeApp(firebaseConfig);
+      database = firebase.database();
+      dataRef = database.ref('guv-data');
+    } catch (err) {
+      console.error('Firebase Init Error:', err);
+    }
+    
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+    // ===== KATEGORIEN =====
+    const CATEGORIES = {
+      waren: { name: 'Wareneinkauf', icon: '📦' },
+      verpackung: { name: 'Verpackung', icon: '📫' },
+      zahlungsgebuehren: { name: 'Zahlungsgebühren', icon: '💳' },
+      versand: { name: 'Versand & Logistik', icon: '🚚' },
+      marketing: { name: 'Marketing', icon: '📣' },
+      software: { name: 'Software & Tools', icon: '💻' },
+      porto: { name: 'Porto', icon: '✉️' },
+      buero: { name: 'Bürobedarf', icon: '🖊️' },
+      reisen: { name: 'Reisekosten', icon: '✈️' },
+      telefon: { name: 'Telefon & Internet', icon: '📱' },
+      beratung: { name: 'Beratung & Services', icon: '👔' },
+      sonstiges: { name: 'Sonstiges', icon: '📋' }
+    };
+    
+    const CATEGORY_COLORS = {
+      waren: '#f59e0b',
+      verpackung: '#8b5cf6',
+      zahlungsgebuehren: '#ec4899',
+      versand: '#06b6d4',
+      marketing: '#f97316',
+      software: '#3b82f6',
+      porto: '#14b8a6',
+      buero: '#6366f1',
+      reisen: '#a855f7',
+      telefon: '#10b981',
+      beratung: '#eab308',
+      sonstiges: '#64748b'
+    };
+
+    // ===== APP STATE =====
+    const currentYear = new Date().getFullYear();
+    const currentMonth = new Date().getMonth();
+    let state = {
+      isLoggedIn: sessionStorage.getItem('loggedIn') === 'true',
+      isLoading: true,
+      selectedYear: currentYear,
+      selectedMonth: currentMonth,
+      showSettings: false,
+      showDashboard: false,
+      expandedProducts: {},
+      pdfAnalyzing: false,
+      pdfResult: null,
+      pdfSelectedCategory: 'sonstiges',
+      years: {}
+    };
+
+    // ===== HELPER FUNCTIONS =====
+    const MONTHS = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
+    
+    function formatCurrency(value) {
+      return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(value || 0);
+    }
+    
+    function generateId() {
+      return Date.now().toString(36) + Math.random().toString(36).substr(2);
+    }
+    
+    function getEmptyMonth() {
+      return {
+        products: [],
+        costs: [],
+        returns: { amount: 0, count: 0 },
+        ruecklage: 0,
+        notes: ''
+      };
+    }
+    
+    function ensureYearExists(year) {
+      if (!state.years[year]) {
+        state.years[year] = {};
+        for (let i = 0; i < 12; i++) {
+          state.years[year][i] = getEmptyMonth();
+        }
+      }
+      for (let i = 0; i < 12; i++) {
+        if (state.years[year][i] && state.years[year][i].ruecklage === undefined) {
+          state.years[year][i].ruecklage = 0;
+        }
+      }
+    }
+
+    // ===== FIREBASE DATA SYNC =====
+    function loadData() {
+      if (!dataRef) {
+        state.isLoading = false;
+        ensureYearExists(currentYear);
+        render();
+        return;
+      }
+      
+      dataRef.on('value', (snapshot) => {
+        const data = snapshot.val();
+        if (data && data.years) {
+          state.years = data.years;
+        }
+        ensureYearExists(currentYear);
+        state.isLoading = false;
+        render();
+      }, (error) => {
+        console.error('Firebase Fehler:', error);
+        state.isLoading = false;
+        ensureYearExists(currentYear);
+        render();
+      });
+    }
+    
+    function saveData() {
+      if (!dataRef) return;
+      dataRef.set({ years: state.years, lastUpdated: Date.now() });
+    }
+
+    // ===== CALCULATIONS =====
+    function calculateProductStats(products) {
+      let totalRevenue = 0, totalCost = 0, totalUnits = 0;
+      products.forEach(p => {
+        totalRevenue += p.revenue || 0;
+        totalCost += p.wareneinsatz || 0;
+        totalUnits += p.units || 0;
+      });
+      return { totalRevenue, totalCost, profit: totalRevenue - totalCost, totalUnits };
+    }
+    
+    function calculateCostsByCategory(costs) {
+      const byCategory = {};
+      (costs || []).forEach(c => {
+        const cat = c.category || 'sonstiges';
+        if (!byCategory[cat]) byCategory[cat] = 0;
+        byCategory[cat] += c.amount || 0;
+      });
+      return byCategory;
+    }
+    
+    function calculateMonthStats(monthData) {
+      const productStats = calculateProductStats(monthData.products || []);
+      const totalCosts = (monthData.costs || []).reduce((sum, c) => sum + (c.amount || 0), 0);
+      const returnsAmount = monthData.returns?.amount || 0;
+      const costsByCategory = calculateCostsByCategory(monthData.costs);
+      const ruecklage = monthData.ruecklage || 0;
+      
+      return {
+        ...productStats,
+        totalCosts,
+        costsByCategory,
+        returnsAmount,
+        ruecklage,
+        grossProfit: productStats.profit - returnsAmount,
+        netProfit: productStats.profit - returnsAmount - totalCosts,
+        netAfterReserve: productStats.profit - returnsAmount - totalCosts - ruecklage
+      };
+    }
+    
+    function calculateYearStats(yearData) {
+      let stats = { totalRevenue: 0, totalCost: 0, totalCosts: 0, totalUnits: 0, returnsAmount: 0, ruecklage: 0 };
+      let costsByCategory = {};
+      
+      for (let i = 0; i < 12; i++) {
+        const m = yearData[i];
+        if (m) {
+          const ms = calculateMonthStats(m);
+          stats.totalRevenue += ms.totalRevenue;
+          stats.totalCost += ms.totalCost;
+          stats.totalCosts += ms.totalCosts;
+          stats.totalUnits += ms.totalUnits;
+          stats.returnsAmount += ms.returnsAmount;
+          stats.ruecklage += ms.ruecklage || 0;
+          
+          Object.entries(ms.costsByCategory).forEach(([cat, amount]) => {
+            if (!costsByCategory[cat]) costsByCategory[cat] = 0;
+            costsByCategory[cat] += amount;
+          });
+        }
+      }
+      stats.costsByCategory = costsByCategory;
+      stats.profit = stats.totalRevenue - stats.totalCost;
+      stats.grossProfit = stats.profit - stats.returnsAmount;
+      stats.netProfit = stats.grossProfit - stats.totalCosts;
+      stats.netAfterReserve = stats.netProfit - stats.ruecklage;
+      return stats;
+    }
+
+    // ===== PRODUCT FUNCTIONS =====
+    function addProduct() {
+      ensureYearExists(state.selectedYear);
+      const monthData = state.years[state.selectedYear][state.selectedMonth];
+      monthData.products.push({
+        id: generateId(),
+        variante: '',
+        produkt: '',
+        revenue: 0,
+        units: 0,
+        wareneinsatz: 0
+      });
+      saveData();
+      render();
+    }
+    
+    function updateProduct(id, field, value) {
+      const monthData = state.years[state.selectedYear][state.selectedMonth];
+      const product = monthData.products.find(p => p.id === id);
+      if (product) {
+        if (field === 'revenue' || field === 'units' || field === 'wareneinsatz') {
+          product[field] = parseFloat(value) || 0;
+        } else {
+          product[field] = value;
+        }
+        saveData();
+        render();
+      }
+    }
+    
+    function deleteProduct(id) {
+      const monthData = state.years[state.selectedYear][state.selectedMonth];
+      monthData.products = monthData.products.filter(p => p.id !== id);
+      saveData();
+      render();
+    }
+
+    // ===== COST FUNCTIONS =====
+    function addCost(category = 'sonstiges', description = '', amount = 0) {
+      ensureYearExists(state.selectedYear);
+      const monthData = state.years[state.selectedYear][state.selectedMonth];
+      monthData.costs.push({
+        id: generateId(),
+        category,
+        description,
+        amount,
+        date: new Date().toISOString().split('T')[0]
+      });
+      saveData();
+      render();
+    }
+    
+    function updateCost(id, field, value) {
+      const monthData = state.years[state.selectedYear][state.selectedMonth];
+      const cost = monthData.costs.find(c => c.id === id);
+      if (cost) {
+        cost[field] = field === 'amount' ? (parseFloat(value) || 0) : value;
+        saveData();
+        render();
+      }
+    }
+    
+    function deleteCost(id) {
+      const monthData = state.years[state.selectedYear][state.selectedMonth];
+      monthData.costs = monthData.costs.filter(c => c.id !== id);
+      saveData();
+      render();
+    }
+
+    // ===== RETURNS =====
+    function updateReturns(field, value) {
+      const monthData = state.years[state.selectedYear][state.selectedMonth];
+      monthData.returns[field] = parseFloat(value) || 0;
+      saveData();
+      render();
+    }
+    
+    // ===== RÜCKLAGE =====
+    function updateRuecklage(value) {
+      const monthData = state.years[state.selectedYear][state.selectedMonth];
+      monthData.ruecklage = parseFloat(value) || 0;
+      saveData();
+      render();
+    }
+
+    // ===== CSV IMPORT =====
+    function parseCSV(text) {
+      const lines = text.trim().split('\n');
+      const headers = lines[0].split(';').map(h => h.trim().replace(/^"|"$/g, ''));
+      
+      return lines.slice(1).map(line => {
+        const values = [];
+        let current = '';
+        let inQuotes = false;
+        
+        for (let char of line) {
+          if (char === '"') {
+            inQuotes = !inQuotes;
+          } else if (char === ';' && !inQuotes) {
+            values.push(current.trim());
+            current = '';
+          } else {
+            current += char;
+          }
+        }
+        values.push(current.trim());
+        
+        const row = {};
+        headers.forEach((h, i) => {
+          row[h] = values[i] || '';
+        });
+        return row;
+      });
+    }
+    
+    function importCSV(file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const rows = parseCSV(e.target.result);
+          ensureYearExists(state.selectedYear);
+          const monthData = state.years[state.selectedYear][state.selectedMonth];
+          
+          rows.forEach(row => {
+            let variante = row['Variantentitel'] || row['Variante'] || '';
+            let produkt = row['Produkttitel'] || row['Produkt'] || row['Titel'] || '';
+            
+            if (variante === 'Default Title' && produkt) {
+              variante = produkt;
+            }
+            
+            const revenueStr = row['Gesamtumsatz'] || row['Umsatz'] || row['Bruttoumsatz'] || '0';
+            const revenue = parseFloat(revenueStr.replace(/[^\d,.-]/g, '').replace(',', '.')) || 0;
+            
+            const unitsStr = row['Netto verkaufte Artikel'] || row['Menge'] || row['Anzahl'] || '0';
+            const units = parseInt(unitsStr) || 0;
+            
+            const wareneinsatzStr = row['Kosten der verkauften Waren'] || row['Wareneinsatz'] || '0';
+            const wareneinsatz = Math.abs(parseFloat(wareneinsatzStr.replace(/[^\d,.-]/g, '').replace(',', '.')) || 0);
+            
+            if ((variante || produkt) && (revenue > 0 || units > 0)) {
+              monthData.products.push({
+                id: generateId(),
+                variante,
+                produkt,
+                revenue,
+                units,
+                wareneinsatz
+              });
+            }
+          });
+          
+          saveData();
+          render();
+          alert(`${rows.length} Produkte importiert!`);
+        } catch (err) {
+          alert('Fehler beim Import: ' + err.message);
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    // ===== PDF ANALYSIS =====
+    async function analyzePDF(file) {
+      state.pdfAnalyzing = true;
+      state.pdfResult = null;
+      render();
+      
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        let fullText = '';
+        
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const textContent = await page.getTextContent();
+          fullText += textContent.items.map(item => item.str).join(' ') + '\n';
+        }
+        
+        const amountPatterns = [
+          /(?:Gesamt|Total|Summe|Betrag|Rechnungsbetrag|Amount)[\s:]*(?:€|EUR|USD|\$)?\s*([\d.,]+)/i,
+          /(?:€|EUR)\s*([\d.,]+)/i,
+          /(\$|USD)\s*([\d.,]+)/i,
+          /([\d.,]+)\s*(?:€|EUR)/i
+        ];
+        
+        let amount = 0;
+        let currency = 'EUR';
+        
+        for (const pattern of amountPatterns) {
+          const match = fullText.match(pattern);
+          if (match) {
+            const numStr = match[1] || match[2];
+            amount = parseFloat(numStr.replace(/\./g, '').replace(',', '.')) || 0;
+            if (fullText.includes('$') || fullText.includes('USD')) currency = 'USD';
+            break;
+          }
+        }
+        
+        let exchangeRate = 1;
+        let originalAmount = amount;
+        if (currency !== 'EUR' && amount > 0) {
+          try {
+            const res = await fetch(`https://api.exchangerate-api.com/v4/latest/${currency}`);
+            const data = await res.json();
+            exchangeRate = data.rates.EUR || 1;
+            amount = amount * exchangeRate;
+          } catch (e) {
+            console.log('Wechselkurs nicht verfügbar');
+          }
+        }
+        
+        const datePatterns = [
+          /(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})/,
+          /(\d{4})[./-](\d{1,2})[./-](\d{1,2})/
+        ];
+        
+        let date = new Date().toISOString().split('T')[0];
+        for (const pattern of datePatterns) {
+          const match = fullText.match(pattern);
+          if (match) {
+            if (match[1].length === 4) {
+              date = `${match[1]}-${match[2].padStart(2,'0')}-${match[3].padStart(2,'0')}`;
+            } else {
+              const year = match[3].length === 2 ? '20' + match[3] : match[3];
+              date = `${year}-${match[2].padStart(2,'0')}-${match[1].padStart(2,'0')}`;
+            }
+            break;
+          }
+        }
+        
+        const knownSuppliers = {
+          'amazon': 'Amazon', 'dhl': 'DHL', 'hermes': 'Hermes', 'ups': 'UPS',
+          'fedex': 'FedEx', 'office': 'Office Depot', 'staples': 'Staples',
+          'google': 'Google', 'meta': 'Meta', 'facebook': 'Facebook',
+          'microsoft': 'Microsoft', 'adobe': 'Adobe', 'canva': 'Canva',
+          'shopify': 'Shopify', 'stripe': 'Stripe', 'paypal': 'PayPal',
+          'klarna': 'Klarna', 'mollie': 'Mollie', 'dpd': 'DPD', 'gls': 'GLS'
+        };
+        
+        let supplier = 'Unbekannt';
+        const textLower = fullText.toLowerCase();
+        for (const [key, name] of Object.entries(knownSuppliers)) {
+          if (textLower.includes(key)) {
+            supplier = name;
+            break;
+          }
+        }
+        
+        const categoryKeywords = {
+          waren: ['produkt', 'artikel', 'ware', 'bestellung', 'order'],
+          verpackung: ['verpackung', 'karton', 'packaging', 'box'],
+          zahlungsgebuehren: ['payment', 'zahlung', 'gebühr', 'transaction', 'stripe', 'paypal', 'klarna', 'mollie'],
+          versand: ['versand', 'shipping', 'logistik', 'fulfillment', 'dhl', 'hermes', 'ups', 'dpd', 'gls'],
+          marketing: ['marketing', 'werbung', 'ads', 'anzeige', 'kampagne'],
+          software: ['software', 'lizenz', 'subscription', 'saas', 'app', 'shopify'],
+          porto: ['porto', 'briefmarke', 'einschreiben'],
+          buero: ['büro', 'office', 'papier', 'toner', 'drucker'],
+          reisen: ['reise', 'flug', 'hotel', 'bahn', 'travel'],
+          telefon: ['telefon', 'handy', 'internet', 'mobilfunk'],
+          beratung: ['beratung', 'consulting', 'honorar', 'service']
+        };
+        
+        let category = 'sonstiges';
+        for (const [cat, keywords] of Object.entries(categoryKeywords)) {
+          if (keywords.some(kw => textLower.includes(kw))) {
+            category = cat;
+            break;
+          }
+        }
+        
+        state.pdfResult = {
+          lieferant: supplier,
+          kategorie: category,
+          datum: date,
+          brutto: amount,
+          bruttoOriginal: originalAmount,
+          waehrung: currency,
+          exchangeRate: exchangeRate !== 1 ? exchangeRate : null
+        };
+        state.pdfSelectedCategory = category;
+        
+      } catch (err) {
+        state.pdfResult = { error: err.message };
+      }
+      
+      state.pdfAnalyzing = false;
+      render();
+    }
+    
+    function confirmPdfImport() {
+      if (!state.pdfResult || state.pdfResult.error) return;
+      addCost(state.pdfSelectedCategory, state.pdfResult.lieferant, state.pdfResult.brutto);
+      state.pdfResult = null;
+      state.pdfSelectedCategory = 'sonstiges';
+      render();
+    }
+    
+    function changePdfCategory(cat) {
+      state.pdfSelectedCategory = cat;
+      render();
+    }
+
+    // ===== BACKUP =====
+    function exportBackup() {
+      const data = JSON.stringify({ years: state.years, exportDate: new Date().toISOString() }, null, 2);
+      const blob = new Blob([data], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `guv-backup-${new Date().toISOString().split('T')[0]}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+    
+    function importBackup(file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = JSON.parse(e.target.result);
+          if (data.years) {
+            state.years = data.years;
+            saveData();
+            render();
+            alert('Backup erfolgreich importiert!');
+          }
+        } catch (err) {
+          alert('Fehler beim Import: ' + err.message);
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    // ===== RENDER FUNCTIONS =====
+    function renderLogin() {
+      return `
+        <div class="min-h-screen flex items-center justify-center p-4">
+          <div class="bg-slate-900 rounded-2xl p-8 max-w-md w-full border border-slate-700 text-center">
+            <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-3xl mx-auto mb-4">🛒</div>
+            <h1 class="text-2xl font-bold mb-2">ahhoi-eCom Shops</h1>
+            <p class="text-slate-400 mb-6">GuV Manager - Bitte Passwort eingeben</p>
+            <input type="password" id="passwordInput" placeholder="Passwort" class="w-full bg-slate-800 rounded-lg px-4 py-3 text-center text-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 mb-4" onkeypress="if(event.key === 'Enter') checkPassword()" />
+            <button onclick="checkPassword()" class="w-full py-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 transition-colors font-medium text-lg">Anmelden</button>
+          </div>
+        </div>
+      `;
+    }
+    
+    function renderLoading() {
+      return `
+        <div class="min-h-screen flex items-center justify-center">
+          <div class="text-center">
+            <div class="spinner mx-auto mb-4"></div>
+            <p class="text-slate-400">Daten werden geladen...</p>
+          </div>
+        </div>
+      `;
+    }
+    
+    function renderHeader() {
+      const yearStats = calculateYearStats(state.years[state.selectedYear] || {});
+      
+      return `
+        <header class="bg-slate-900 border-b border-slate-800 sticky top-0 z-50">
+          <div class="max-w-7xl mx-auto px-4 py-4">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-4">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-xl">🛒</div>
+                <div>
+                  <h1 class="font-bold text-lg">ahhoi-eCom Shops</h1>
+                  <p class="text-sm text-slate-400">GuV Manager</p>
+                </div>
+              </div>
+              
+              <div class="flex items-center gap-3">
+                <select onchange="state.selectedYear = parseInt(this.value); render()" class="bg-slate-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500">
+                  ${[currentYear - 2, currentYear - 1, currentYear, currentYear + 1].map(y => 
+                    `<option value="${y}" ${y === state.selectedYear ? 'selected' : ''}>${y}</option>`
+                  ).join('')}
+                </select>
+                <button onclick="state.showDashboard = !state.showDashboard; render()" class="p-2 rounded-lg ${state.showDashboard ? 'bg-emerald-600' : 'bg-slate-800 hover:bg-slate-700'} transition-colors" title="Dashboard">📊</button>
+                <button onclick="state.showSettings = !state.showSettings; render()" class="p-2 rounded-lg ${state.showSettings ? 'bg-emerald-600' : 'bg-slate-800 hover:bg-slate-700'} transition-colors" title="Einstellungen">⚙️</button>
+              </div>
+            </div>
+            
+            <div class="grid grid-cols-4 gap-4 mt-4">
+              <div class="bg-slate-800/50 rounded-xl p-3">
+                <p class="text-xs text-slate-400">Umsatz ${state.selectedYear}</p>
+                <p class="text-lg font-bold text-emerald-400">${formatCurrency(yearStats.totalRevenue)}</p>
+              </div>
+              <div class="bg-slate-800/50 rounded-xl p-3">
+                <p class="text-xs text-slate-400">Wareneinsatz</p>
+                <p class="text-lg font-bold text-amber-400">${formatCurrency(yearStats.totalCost)}</p>
+              </div>
+              <div class="bg-slate-800/50 rounded-xl p-3">
+                <p class="text-xs text-slate-400">Kosten</p>
+                <p class="text-lg font-bold text-red-400">${formatCurrency(yearStats.totalCosts)}</p>
+              </div>
+              <div class="bg-slate-800/50 rounded-xl p-3">
+                <p class="text-xs text-slate-400">Gewinn</p>
+                <p class="text-lg font-bold ${yearStats.netProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}">${formatCurrency(yearStats.netProfit)}</p>
+              </div>
+            </div>
+          </div>
+        </header>
+      `;
+    }
+    
+    function renderMonthTabs() {
+      return `
+        <div class="bg-slate-900/50 border-b border-slate-800">
+          <div class="max-w-7xl mx-auto px-4">
+            <div class="flex gap-1 overflow-x-auto py-2">
+              ${MONTHS.map((month, idx) => {
+                const monthData = state.years[state.selectedYear]?.[idx];
+                const hasData = monthData && (monthData.products?.length > 0 || monthData.costs?.length > 0);
+                const isCurrent = idx === currentMonth && state.selectedYear === currentYear;
+                return `
+                  <button 
+                    onclick="state.selectedMonth = ${idx}; render()"
+                    class="px-4 py-2 rounded-lg text-sm whitespace-nowrap transition-colors relative ${
+                      idx === state.selectedMonth 
+                        ? 'bg-emerald-600 text-white' 
+                        : hasData 
+                          ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' 
+                          : 'text-slate-500 hover:bg-slate-800'
+                    }"
+                  >
+                    ${month.substr(0, 3)}
+                    ${isCurrent && idx !== state.selectedMonth ? '<span class="absolute -top-1 -right-1 w-2 h-2 bg-emerald-400 rounded-full"></span>' : ''}
+                  </button>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+    
+    function renderProducts(monthData) {
+      const products = monthData.products || [];
+      const stats = calculateProductStats(products);
+      
+      return `
+        <div class="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden">
+          <div class="p-4 border-b border-slate-800 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+              <span class="text-xl">📦</span>
+              <div>
+                <h2 class="font-semibold">Produkte</h2>
+                <p class="text-xs text-slate-400">${products.length} Produkte • ${stats.totalUnits} Stück</p>
+              </div>
+            </div>
+            <div class="flex items-center gap-2">
+              <button onclick="document.getElementById('csvInput').click()" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm transition-colors">📄 CSV Import</button>
+              <button onclick="addProduct()" class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm transition-colors">+ Hinzufügen</button>
+            </div>
+          </div>
+          
+          ${products.length === 0 ? `
+            <div class="p-8 text-center text-slate-500">
+              <p class="text-4xl mb-2">📦</p>
+              <p>Keine Produkte vorhanden</p>
+              <p class="text-sm">Klicke auf "CSV Import" oder "Hinzufügen"</p>
+            </div>
+          ` : `
+            <div class="divide-y divide-slate-800">
+              ${products.map(p => {
+                const profit = (p.revenue || 0) - (p.wareneinsatz || 0);
+                const margin = p.revenue > 0 ? (profit / p.revenue * 100) : 0;
+                
+                return `
+                  <div class="p-4 hover:bg-slate-800/30 transition-colors">
+                    <div class="grid grid-cols-12 gap-3 items-center">
+                      <div class="col-span-3">
+                        <input type="text" value="${p.variante || ''}" placeholder="Variante" onchange="updateProduct('${p.id}', 'variante', this.value)" class="w-full bg-slate-800 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+                        <input type="text" value="${p.produkt || ''}" placeholder="Produkt" onchange="updateProduct('${p.id}', 'produkt', this.value)" class="w-full bg-slate-800/50 rounded px-3 py-1.5 text-xs text-slate-400 mt-1 focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+                      </div>
+                      <div class="col-span-2">
+                        <label class="text-xs text-slate-500">Umsatz (€)</label>
+                        <input type="number" step="0.01" value="${p.revenue || ''}" placeholder="0,00" onchange="updateProduct('${p.id}', 'revenue', this.value)" class="w-full bg-slate-800 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+                      </div>
+                      <div class="col-span-1">
+                        <label class="text-xs text-slate-500">Menge</label>
+                        <input type="number" value="${p.units || ''}" placeholder="0" onchange="updateProduct('${p.id}', 'units', this.value)" class="w-full bg-slate-800 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+                      </div>
+                      <div class="col-span-2">
+                        <label class="text-xs text-slate-500">Wareneinsatz (€)</label>
+                        <input type="number" step="0.01" value="${p.wareneinsatz || ''}" placeholder="0,00" onchange="updateProduct('${p.id}', 'wareneinsatz', this.value)" class="w-full bg-slate-800 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+                      </div>
+                      <div class="col-span-2 text-right">
+                        <p class="text-xs text-slate-500">Gewinn</p>
+                        <p class="font-medium ${profit >= 0 ? 'text-emerald-400' : 'text-red-400'}">${formatCurrency(profit)}</p>
+                        <p class="text-xs text-slate-500">${margin.toFixed(1)}% Marge</p>
+                      </div>
+                      <div class="col-span-2 text-right">
+                        <button onclick="deleteProduct('${p.id}')" class="p-2 rounded-lg hover:bg-red-500/20 text-red-400 transition-colors">🗑️</button>
+                      </div>
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+            
+            <div class="p-4 bg-slate-800/30 border-t border-slate-800">
+              <div class="grid grid-cols-4 gap-4 text-center">
+                <div>
+                  <p class="text-xs text-slate-400">Umsatz</p>
+                  <p class="font-bold text-emerald-400">${formatCurrency(stats.totalRevenue)}</p>
+                </div>
+                <div>
+                  <p class="text-xs text-slate-400">Wareneinsatz</p>
+                  <p class="font-bold text-amber-400">${formatCurrency(stats.totalCost)}</p>
+                </div>
+                <div>
+                  <p class="text-xs text-slate-400">Rohgewinn</p>
+                  <p class="font-bold ${stats.profit >= 0 ? 'text-emerald-400' : 'text-red-400'}">${formatCurrency(stats.profit)}</p>
+                </div>
+                <div>
+                  <p class="text-xs text-slate-400">Stückzahl</p>
+                  <p class="font-bold">${stats.totalUnits}</p>
+                </div>
+              </div>
+            </div>
+          `}
+        </div>
+      `;
+    }
+    
+    function renderCosts(monthData) {
+      const costs = monthData.costs || [];
+      const totalCosts = costs.reduce((sum, c) => sum + (c.amount || 0), 0);
+      
+      const byCategory = {};
+      costs.forEach(c => {
+        if (!byCategory[c.category]) byCategory[c.category] = [];
+        byCategory[c.category].push(c);
+      });
+      
+      return `
+        <div class="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden">
+          <div class="p-4 border-b border-slate-800 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+              <span class="text-xl">💰</span>
+              <div>
+                <h2 class="font-semibold">Kosten</h2>
+                <p class="text-xs text-slate-400">${costs.length} Einträge • ${formatCurrency(totalCosts)}</p>
+              </div>
+            </div>
+            <div class="flex items-center gap-2">
+              <button onclick="document.getElementById('pdfInput').click()" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm transition-colors">📄 PDF Analyse</button>
+              <button onclick="addCost()" class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm transition-colors">+ Hinzufügen</button>
+            </div>
+          </div>
+          
+          ${state.pdfAnalyzing ? `
+            <div class="p-8 text-center">
+              <div class="spinner mx-auto mb-4"></div>
+              <p class="text-slate-400">PDF wird analysiert...</p>
+            </div>
+          ` : state.pdfResult ? (state.pdfResult.error ? `
+            <div class="p-4 bg-red-500/10 border-b border-slate-800">
+              <p class="text-red-400">Fehler: ${state.pdfResult.error}</p>
+              <button onclick="state.pdfResult = null; render()" class="text-sm underline mt-2">Schließen</button>
+            </div>
+          ` : `
+            <div class="p-4 bg-emerald-500/10 border-b border-slate-800">
+              <h3 class="font-medium mb-3">PDF Analyse Ergebnis</h3>
+              ${state.pdfResult.waehrung !== 'EUR' && state.pdfResult.exchangeRate ? `
+                <div class="bg-blue-500/20 rounded-lg p-3 mb-3 text-sm">
+                  <span class="text-blue-400">💱 Fremdwährung:</span> 
+                  ${state.pdfResult.bruttoOriginal?.toFixed(2)} ${state.pdfResult.waehrung} → ${formatCurrency(state.pdfResult.brutto)}
+                </div>
+              ` : ''}
+              <div class="grid grid-cols-2 gap-4 mb-4">
+                <div>
+                  <p class="text-xs text-slate-400">Lieferant</p>
+                  <p class="font-medium">${state.pdfResult.lieferant}</p>
+                </div>
+                <div>
+                  <p class="text-xs text-slate-400">Betrag</p>
+                  <p class="font-medium text-emerald-400">${formatCurrency(state.pdfResult.brutto)}</p>
+                </div>
+                <div>
+                  <p class="text-xs text-slate-400">Datum</p>
+                  <p>${state.pdfResult.datum}</p>
+                </div>
+                <div>
+                  <p class="text-xs text-slate-400">Kategorie</p>
+                  <select onchange="changePdfCategory(this.value)" class="bg-slate-800 rounded px-2 py-1 text-sm">
+                    ${Object.entries(CATEGORIES).map(([key, cat]) => 
+                      `<option value="${key}" ${state.pdfSelectedCategory === key ? 'selected' : ''}>${cat.icon} ${cat.name}</option>`
+                    ).join('')}
+                  </select>
+                </div>
+              </div>
+              <div class="flex gap-2">
+                <button onclick="confirmPdfImport()" class="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm">✓ Übernehmen</button>
+                <button onclick="state.pdfResult = null; render()" class="px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-sm">✕ Abbrechen</button>
+              </div>
+            </div>
+          `) : ''}
+          
+          ${costs.length === 0 ? `
+            <div class="p-8 text-center text-slate-500">
+              <p class="text-4xl mb-2">💰</p>
+              <p>Keine Kosten erfasst</p>
+              <p class="text-sm">Klicke auf "PDF Analyse" oder "Hinzufügen"</p>
+            </div>
+          ` : `
+            <div class="divide-y divide-slate-800">
+              ${Object.entries(byCategory).map(([cat, items]) => {
+                const catInfo = CATEGORIES[cat] || { name: cat, icon: '📋' };
+                const catTotal = items.reduce((sum, c) => sum + (c.amount || 0), 0);
+                
+                return `
+                  <div class="p-4">
+                    <div class="flex items-center justify-between mb-3">
+                      <div class="flex items-center gap-2">
+                        <span>${catInfo.icon}</span>
+                        <span class="font-medium">${catInfo.name}</span>
+                        <span class="text-xs text-slate-500">(${items.length})</span>
+                      </div>
+                      <span class="text-sm text-red-400">${formatCurrency(catTotal)}</span>
+                    </div>
+                    <div class="space-y-2 ml-6">
+                      ${items.map(c => `
+                        <div class="flex items-center gap-3 text-sm">
+                          <input type="text" value="${c.description || ''}" placeholder="Beschreibung" onchange="updateCost('${c.id}', 'description', this.value)" class="flex-1 bg-slate-800/50 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+                          <input type="number" step="0.01" value="${c.amount || ''}" placeholder="0,00" onchange="updateCost('${c.id}', 'amount', this.value)" class="w-24 bg-slate-800/50 rounded px-2 py-1 text-right focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+                          <span class="text-slate-500">€</span>
+                          <select onchange="updateCost('${c.id}', 'category', this.value)" class="bg-slate-800/50 rounded px-2 py-1 text-xs">
+                            ${Object.entries(CATEGORIES).map(([key, cat]) => 
+                              `<option value="${key}" ${c.category === key ? 'selected' : ''}>${cat.icon}</option>`
+                            ).join('')}
+                          </select>
+                          <button onclick="deleteCost('${c.id}')" class="p-1 hover:bg-red-500/20 rounded text-red-400">🗑️</button>
+                        </div>
+                      `).join('')}
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          `}
+        </div>
+      `;
+    }
+    
+    function renderReturns(monthData) {
+      const returns = monthData.returns || { amount: 0, count: 0 };
+      return `
+        <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+          <div class="flex items-center gap-3 mb-4">
+            <span class="text-xl">↩️</span>
+            <h2 class="font-semibold">Retouren</h2>
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="text-xs text-slate-400">Betrag (€)</label>
+              <input type="number" step="0.01" value="${returns.amount || ''}" placeholder="0,00" onchange="updateReturns('amount', this.value)" class="w-full bg-slate-800 rounded px-3 py-2 mt-1 focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+            </div>
+            <div>
+              <label class="text-xs text-slate-400">Anzahl</label>
+              <input type="number" value="${returns.count || ''}" placeholder="0" onchange="updateReturns('count', this.value)" class="w-full bg-slate-800 rounded px-3 py-2 mt-1 focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+            </div>
+          </div>
+        </div>
+      `;
+    }
+    
+    function renderRuecklage(monthData) {
+      const ruecklage = monthData.ruecklage || 0;
+      const stats = calculateMonthStats(monthData);
+      
+      return `
+        <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+          <div class="flex items-center gap-3 mb-4">
+            <span class="text-xl">🏦</span>
+            <h2 class="font-semibold">Rücklage</h2>
+          </div>
+          <div>
+            <label class="text-xs text-slate-400">Monatliche Rücklage (€)</label>
+            <input type="number" step="0.01" value="${ruecklage || ''}" placeholder="0,00" onchange="updateRuecklage(this.value)" class="w-full bg-slate-800 rounded px-3 py-2 mt-1 focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+          </div>
+          ${ruecklage > 0 ? `
+            <div class="mt-3 pt-3 border-t border-slate-800">
+              <div class="flex justify-between text-sm">
+                <span class="text-slate-400">Verfügbar nach Rücklage</span>
+                <span class="font-medium ${stats.netAfterReserve >= 0 ? 'text-emerald-400' : 'text-red-400'}">${formatCurrency(stats.netAfterReserve)}</span>
+              </div>
+            </div>
+          ` : ''}
+        </div>
+      `;
+    }
+    
+    function renderSummary(monthData) {
+      const stats = calculateMonthStats(monthData);
+      const costsByCategory = stats.costsByCategory;
+      const hasCosts = Object.keys(costsByCategory).length > 0;
+      
+      return `
+        <div class="bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl border border-slate-700 p-6">
+          <h2 class="font-semibold mb-4">${MONTHS[state.selectedMonth]} ${state.selectedYear} - Zusammenfassung</h2>
+          
+          <div class="space-y-3">
+            <div class="flex justify-between">
+              <span class="text-slate-400">Umsatz</span>
+              <span class="font-medium text-emerald-400">${formatCurrency(stats.totalRevenue)}</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-slate-400">- Wareneinsatz</span>
+              <span class="text-amber-400">${formatCurrency(stats.totalCost)}</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-slate-400">- Retouren</span>
+              <span class="text-orange-400">${formatCurrency(stats.returnsAmount)}</span>
+            </div>
+            <div class="border-t border-slate-700 pt-3 flex justify-between">
+              <span class="text-slate-300">= Rohgewinn</span>
+              <span class="font-medium ${stats.grossProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}">${formatCurrency(stats.grossProfit)}</span>
+            </div>
+            
+            ${hasCosts ? `
+              <div class="border-t border-slate-700 pt-3">
+                <p class="text-xs text-slate-500 uppercase tracking-wider mb-2">Kostenaufschlüsselung</p>
+                <div class="space-y-2">
+                  ${Object.entries(costsByCategory)
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([cat, amount]) => {
+                      const catInfo = CATEGORIES[cat] || { name: cat, icon: '📋' };
+                      const pct = stats.totalCosts > 0 ? (amount / stats.totalCosts * 100) : 0;
+                      const color = CATEGORY_COLORS[cat] || '#64748b';
+                      return `
+                        <div>
+                          <div class="flex justify-between text-sm mb-1">
+                            <span class="text-slate-400">${catInfo.icon} ${catInfo.name}</span>
+                            <span class="text-red-400">${formatCurrency(amount)}</span>
+                          </div>
+                          <div class="h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                            <div class="h-full rounded-full cost-bar" style="width: ${pct}%; background: ${color}"></div>
+                          </div>
+                        </div>
+                      `;
+                    }).join('')}
+                </div>
+              </div>
+            ` : ''}
+            
+            <div class="flex justify-between text-sm">
+              <span class="text-slate-400">- Kosten gesamt</span>
+              <span class="text-red-400">${formatCurrency(stats.totalCosts)}</span>
+            </div>
+            
+            <div class="border-t border-slate-700 pt-3 flex justify-between">
+              <span class="font-semibold">Betriebsergebnis</span>
+              <span class="font-bold text-lg ${stats.netProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}">${formatCurrency(stats.netProfit)}</span>
+            </div>
+            
+            ${stats.ruecklage > 0 ? `
+              <div class="flex justify-between text-sm">
+                <span class="text-slate-400">- Rücklage</span>
+                <span class="text-blue-400">${formatCurrency(stats.ruecklage)}</span>
+              </div>
+              <div class="border-t border-slate-700 pt-3 flex justify-between">
+                <span class="font-semibold">Verfügbar</span>
+                <span class="font-bold ${stats.netAfterReserve >= 0 ? 'text-emerald-400' : 'text-red-400'}">${formatCurrency(stats.netAfterReserve)}</span>
+              </div>
+            ` : ''}
+          </div>
+        </div>
+      `;
+    }
+    
+    function renderDashboard() {
+      const yearData = state.years[state.selectedYear] || {};
+      const yearStats = calculateYearStats(yearData);
+      
+      const monthlyData = MONTHS.map((month, idx) => {
+        const ms = calculateMonthStats(yearData[idx] || getEmptyMonth());
+        return { month: month.substr(0, 3), ...ms };
+      });
+      
+      // Top 5 Varianten
+      const allProducts = [];
+      for (let i = 0; i < 12; i++) {
+        (yearData[i]?.products || []).forEach(p => {
+          allProducts.push({ ...p, monthIdx: i });
+        });
+      }
+      
+      const productStats = {};
+      allProducts.forEach(p => {
+        const key = p.variante || p.produkt || 'Unbekannt';
+        if (!productStats[key]) {
+          productStats[key] = { name: key, revenue: 0, profit: 0, units: 0, wareneinsatz: 0 };
+        }
+        productStats[key].revenue += p.revenue || 0;
+        productStats[key].profit += (p.revenue || 0) - (p.wareneinsatz || 0);
+        productStats[key].units += p.units || 0;
+        productStats[key].wareneinsatz += p.wareneinsatz || 0;
+      });
+      
+      const topProducts = Object.values(productStats).sort((a, b) => b.revenue - a.revenue).slice(0, 5);
+      
+      // Kosten nach Kategorien
+      const costsByCategory = yearStats.costsByCategory || {};
+      const sortedCosts = Object.entries(costsByCategory).sort((a, b) => b[1] - a[1]);
+      const totalYearCosts = yearStats.totalCosts;
+      
+      // Monats-Kosten-Matrix
+      const monthlyCostData = MONTHS.map((month, idx) => {
+        const m = yearData[idx] || getEmptyMonth();
+        return { month: month.substr(0, 3), costs: calculateCostsByCategory(m.costs) };
+      });
+      
+      return `
+        <div class="fixed inset-0 bg-slate-950/90 z-50 overflow-auto">
+          <div class="max-w-7xl mx-auto p-6">
+            <div class="flex items-center justify-between mb-6">
+              <h1 class="text-2xl font-bold">📊 Jahresübersicht ${state.selectedYear}</h1>
+              <button onclick="state.showDashboard = false; render()" class="p-2 rounded-lg bg-slate-800 hover:bg-slate-700">✕</button>
+            </div>
+            
+            <!-- Year Stats -->
+            <div class="grid grid-cols-6 gap-4 mb-6">
+              <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
+                <p class="text-xs text-slate-400">Umsatz</p>
+                <p class="text-2xl font-bold text-emerald-400">${formatCurrency(yearStats.totalRevenue)}</p>
+              </div>
+              <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
+                <p class="text-xs text-slate-400">Wareneinsatz</p>
+                <p class="text-2xl font-bold text-amber-400">${formatCurrency(yearStats.totalCost)}</p>
+              </div>
+              <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
+                <p class="text-xs text-slate-400">Rohgewinn</p>
+                <p class="text-2xl font-bold text-blue-400">${formatCurrency(yearStats.grossProfit)}</p>
+              </div>
+              <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
+                <p class="text-xs text-slate-400">Kosten</p>
+                <p class="text-2xl font-bold text-red-400">${formatCurrency(yearStats.totalCosts)}</p>
+              </div>
+              <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
+                <p class="text-xs text-slate-400">Gewinn</p>
+                <p class="text-2xl font-bold ${yearStats.netProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}">${formatCurrency(yearStats.netProfit)}</p>
+              </div>
+              <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
+                <p class="text-xs text-slate-400">Rücklagen</p>
+                <p class="text-2xl font-bold text-blue-400">${formatCurrency(yearStats.ruecklage)}</p>
+              </div>
+            </div>
+            
+            <!-- Monthly Chart -->
+            <div class="bg-slate-900 rounded-xl p-4 border border-slate-800 mb-6">
+              <h3 class="font-medium mb-4">Monatlicher Verlauf</h3>
+              <div class="h-64 flex items-end gap-2">
+                ${monthlyData.map((m, idx) => {
+                  const maxRevenue = Math.max(...monthlyData.map(d => d.totalRevenue)) || 1;
+                  const height = Math.max((m.totalRevenue / maxRevenue) * 100, 2);
+                  const profitHeight = Math.max((Math.abs(m.netProfit) / maxRevenue) * 100, 2);
+                  
+                  return `
+                    <div class="flex-1 flex flex-col items-center">
+                      <div class="w-full flex gap-0.5 items-end h-48">
+                        <div class="flex-1 bg-emerald-500/50 rounded-t" style="height: ${height}%"></div>
+                        <div class="flex-1 ${m.netProfit >= 0 ? 'bg-blue-500/50' : 'bg-red-500/50'} rounded-t" style="height: ${profitHeight}%"></div>
+                      </div>
+                      <button onclick="state.selectedMonth = ${idx}; state.showDashboard = false; render()" class="text-xs text-slate-400 mt-2 hover:text-emerald-400">${m.month}</button>
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+              <div class="flex justify-center gap-6 mt-4 text-xs">
+                <span class="flex items-center gap-1"><span class="w-3 h-3 bg-emerald-500/50 rounded"></span> Umsatz</span>
+                <span class="flex items-center gap-1"><span class="w-3 h-3 bg-blue-500/50 rounded"></span> Gewinn</span>
+                <span class="flex items-center gap-1"><span class="w-3 h-3 bg-red-500/50 rounded"></span> Verlust</span>
+              </div>
+            </div>
+            
+            <div class="grid grid-cols-2 gap-6 mb-6">
+              <!-- Top 5 Varianten -->
+              <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
+                <h3 class="font-medium mb-4">🏆 Top 5 Varianten</h3>
+                ${topProducts.length === 0 ? `
+                  <p class="text-slate-500 text-center py-4">Noch keine Produktdaten</p>
+                ` : `
+                  <div class="space-y-3">
+                    ${topProducts.map((p, idx) => {
+                      const maxRev = topProducts[0].revenue || 1;
+                      const width = (p.revenue / maxRev) * 100;
+                      const margin = p.revenue > 0 ? (p.profit / p.revenue * 100) : 0;
+                      const medals = ['🥇', '🥈', '🥉', '4.', '5.'];
+                      
+                      return `
+                        <div class="bg-slate-800/50 rounded-lg p-3">
+                          <div class="flex items-start gap-3">
+                            <span class="text-lg mt-0.5">${medals[idx]}</span>
+                            <div class="flex-1 min-w-0">
+                              <div class="flex justify-between items-start mb-1">
+                                <span class="text-sm font-medium truncate mr-2">${p.name}</span>
+                                <span class="text-emerald-400 font-bold whitespace-nowrap">${formatCurrency(p.revenue)}</span>
+                              </div>
+                              <div class="h-2 bg-slate-700 rounded-full overflow-hidden mb-2">
+                                <div class="h-full bg-emerald-500/60 rounded-full cost-bar" style="width: ${width}%"></div>
+                              </div>
+                              <div class="flex gap-4 text-xs text-slate-400">
+                                <span>${p.units} Stk</span>
+                                <span>WEK: ${formatCurrency(p.wareneinsatz)}</span>
+                                <span class="${margin >= 30 ? 'text-emerald-400' : margin >= 15 ? 'text-amber-400' : 'text-red-400'}">${margin.toFixed(1)}% Marge</span>
+                                <span class="${p.profit >= 0 ? 'text-emerald-400' : 'text-red-400'}">Gewinn: ${formatCurrency(p.profit)}</span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      `;
+                    }).join('')}
+                  </div>
+                `}
+              </div>
+              
+              <!-- Kostenübersicht nach Kategorien -->
+              <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
+                <h3 class="font-medium mb-4">💰 Kosten nach Kategorien (${state.selectedYear})</h3>
+                ${sortedCosts.length === 0 ? `
+                  <p class="text-slate-500 text-center py-4">Noch keine Kostendaten</p>
+                ` : `
+                  <div class="space-y-3">
+                    ${sortedCosts.map(([cat, amount]) => {
+                      const catInfo = CATEGORIES[cat] || { name: cat, icon: '📋' };
+                      const pct = totalYearCosts > 0 ? (amount / totalYearCosts * 100) : 0;
+                      const color = CATEGORY_COLORS[cat] || '#64748b';
+                      const maxCat = sortedCosts[0]?.[1] || 1;
+                      const barWidth = (amount / maxCat) * 100;
+                      
+                      return `
+                        <div>
+                          <div class="flex justify-between text-sm mb-1">
+                            <span class="flex items-center gap-2">
+                              <span>${catInfo.icon}</span>
+                              <span class="text-slate-300">${catInfo.name}</span>
+                              <span class="text-xs text-slate-500">${pct.toFixed(1)}%</span>
+                            </span>
+                            <span class="text-red-400 font-medium">${formatCurrency(amount)}</span>
+                          </div>
+                          <div class="h-2 bg-slate-700 rounded-full overflow-hidden">
+                            <div class="h-full rounded-full cost-bar" style="width: ${barWidth}%; background: ${color}"></div>
+                          </div>
+                        </div>
+                      `;
+                    }).join('')}
+                    <div class="border-t border-slate-700 pt-3 mt-3 flex justify-between font-medium">
+                      <span>Gesamt</span>
+                      <span class="text-red-400">${formatCurrency(totalYearCosts)}</span>
+                    </div>
+                  </div>
+                `}
+              </div>
+            </div>
+            
+            <!-- Kosten-Matrix: Kategorie × Monat -->
+            ${sortedCosts.length > 0 ? `
+              <div class="bg-slate-900 rounded-xl p-4 border border-slate-800 mb-6">
+                <h3 class="font-medium mb-4">📅 Kosten pro Kategorie & Monat</h3>
+                <div class="overflow-x-auto">
+                  <table class="w-full text-sm">
+                    <thead>
+                      <tr class="border-b border-slate-700">
+                        <th class="text-left py-2 px-2 text-slate-400 font-medium">Kategorie</th>
+                        ${MONTHS.map(m => `<th class="text-right py-2 px-1 text-slate-400 font-medium text-xs">${m.substr(0,3)}</th>`).join('')}
+                        <th class="text-right py-2 px-2 text-slate-400 font-medium">Gesamt</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${sortedCosts.map(([cat, total]) => {
+                        const catInfo = CATEGORIES[cat] || { name: cat, icon: '📋' };
+                        return `
+                          <tr class="border-b border-slate-800/50 hover:bg-slate-800/30">
+                            <td class="py-2 px-2 whitespace-nowrap">${catInfo.icon} ${catInfo.name}</td>
+                            ${monthlyCostData.map(m => {
+                              const val = m.costs[cat] || 0;
+                              return `<td class="text-right py-2 px-1 text-xs ${val > 0 ? 'text-red-400' : 'text-slate-600'}">${val > 0 ? formatCurrency(val) : '—'}</td>`;
+                            }).join('')}
+                            <td class="text-right py-2 px-2 font-medium text-red-400">${formatCurrency(total)}</td>
+                          </tr>
+                        `;
+                      }).join('')}
+                      <tr class="border-t border-slate-600 font-medium">
+                        <td class="py-2 px-2">Gesamt</td>
+                        ${monthlyCostData.map(m => {
+                          const monthTotal = Object.values(m.costs).reduce((s, v) => s + v, 0);
+                          return `<td class="text-right py-2 px-1 text-xs ${monthTotal > 0 ? 'text-red-400' : 'text-slate-600'}">${monthTotal > 0 ? formatCurrency(monthTotal) : '—'}</td>`;
+                        }).join('')}
+                        <td class="text-right py-2 px-2 text-red-400">${formatCurrency(totalYearCosts)}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ` : ''}
+          </div>
+        </div>
+      `;
+    }
+    
+    function renderSettings() {
+      return `
+        <div class="fixed inset-0 bg-slate-950/90 z-50 flex items-center justify-center p-4">
+          <div class="bg-slate-900 rounded-2xl border border-slate-800 max-w-md w-full p-6">
+            <div class="flex items-center justify-between mb-6">
+              <h2 class="text-xl font-bold">⚙️ Einstellungen</h2>
+              <button onclick="state.showSettings = false; render()" class="p-2 rounded-lg bg-slate-800 hover:bg-slate-700">✕</button>
+            </div>
+            <div class="space-y-4">
+              <div>
+                <h3 class="font-medium mb-2">Backup & Export</h3>
+                <div class="flex gap-2">
+                  <button onclick="exportBackup()" class="flex-1 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm">💾 Backup erstellen</button>
+                  <button onclick="document.getElementById('backupInput').click()" class="flex-1 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm">📥 Backup laden</button>
+                </div>
+              </div>
+              <div class="pt-4 border-t border-slate-800">
+                <h3 class="font-medium mb-2">Firebase Status</h3>
+                <p class="text-sm ${database ? 'text-emerald-400' : 'text-red-400'}">
+                  ${database ? '✓ Verbunden' : '✕ Nicht verbunden'}
+                </p>
+                ${!database ? `<p class="text-xs text-slate-500 mt-1">Firebase Config in der index.html prüfen</p>` : ''}
+              </div>
+              <div class="pt-4 border-t border-slate-800">
+                <button onclick="if(confirm('Wirklich abmelden?')) { sessionStorage.clear(); location.reload(); }" class="w-full py-2 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 text-sm">🚪 Abmelden</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    // ===== MAIN RENDER =====
+    function render() {
+      if (!state.isLoggedIn) {
+        document.getElementById('app').innerHTML = renderLogin();
+        return;
+      }
+      
+      if (state.isLoading) {
+        document.getElementById('app').innerHTML = renderLoading();
+        return;
+      }
+      
+      ensureYearExists(state.selectedYear);
+      const monthData = state.years[state.selectedYear][state.selectedMonth];
+      
+      document.getElementById('app').innerHTML = `
+        ${renderHeader()}
+        ${renderMonthTabs()}
+        
+        <main class="max-w-7xl mx-auto p-4 space-y-6">
+          <div class="grid grid-cols-3 gap-6">
+            <div class="col-span-2 space-y-6">
+              ${renderProducts(monthData)}
+              ${renderCosts(monthData)}
+            </div>
+            <div class="space-y-6">
+              ${renderSummary(monthData)}
+              ${renderReturns(monthData)}
+              ${renderRuecklage(monthData)}
+            </div>
+          </div>
+        </main>
+        
+        ${state.showDashboard ? renderDashboard() : ''}
+        ${state.showSettings ? renderSettings() : ''}
+      `;
+    }
+
+    // ===== INIT =====
+    function checkPassword() {
+      const input = document.getElementById('passwordInput');
+      if (input.value === APP_PASSWORD) {
+        state.isLoggedIn = true;
+        sessionStorage.setItem('loggedIn', 'true');
+        loadData();
+      } else {
+        alert('Falsches Passwort!');
+      }
+    }
+    
+    document.getElementById('csvInput').addEventListener('change', (e) => {
+      if (e.target.files[0]) { importCSV(e.target.files[0]); e.target.value = ''; }
+    });
+    document.getElementById('pdfInput').addEventListener('change', (e) => {
+      if (e.target.files[0]) { analyzePDF(e.target.files[0]); e.target.value = ''; }
+    });
+    document.getElementById('backupInput').addEventListener('change', (e) => {
+      if (e.target.files[0]) { importBackup(e.target.files[0]); e.target.value = ''; }
+    });
+    
+    if (state.isLoggedIn) {
+      loadData();
+    } else {
+      render();
+    }
+  </script>
+</body>
+</html>
