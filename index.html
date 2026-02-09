@@ -42,18 +42,21 @@
 
   <script>
     // ===== FIREBASE CONFIG =====
+    // WICHTIG: Diese Werte mit deinen eigenen Firebase-Daten ersetzen!
     const firebaseConfig = {
-      apiKey: "AIzaSyAwLggvONE9o6oo5i7HHAnHz98YOorrHsc",
-      authDomain: "kunde---guv-rechner.firebaseapp.com",
-      databaseURL: "https://kunde---guv-rechner-default-rtdb.europe-west1.firebasedatabase.app",
-      projectId: "kunde---guv-rechner",
-      storageBucket: "kunde---guv-rechner.firebasestorage.app",
-      messagingSenderId: "856501811925",
-      appId: "1:856501811925:web:c01d2e04ca8d963e71405c"
-    };
+  apiKey: "AIzaSyAwLggvONE9o6oo5i7HHAnHz98YOorrHsc",
+  authDomain: "kunde---guv-rechner.firebaseapp.com",
+  databaseURL: "https://kunde---guv-rechner-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "kunde---guv-rechner",
+  storageBucket: "kunde---guv-rechner.firebasestorage.app",
+  messagingSenderId: "856501811925",
+  appId: "1:856501811925:web:c01d2e04ca8d963e71405c"
+};
     
-    const APP_PASSWORD = "kunde2024";
+    // Passwort für die App
+    const APP_PASSWORD = "alphavitalis123!";
     
+    // Firebase initialisieren
     let database = null;
     let dataRef = null;
     
@@ -65,6 +68,7 @@
       console.error('Firebase Init Error:', err);
     }
     
+    // PDF.js Worker
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
     // ===== KATEGORIEN =====
@@ -82,7 +86,7 @@
       beratung: { name: 'Beratung & Services', icon: '👔' },
       sonstiges: { name: 'Sonstiges', icon: '📋' }
     };
-    
+
     const CATEGORY_COLORS = {
       waren: '#f59e0b',
       verpackung: '#8b5cf6',
@@ -143,6 +147,7 @@
           state.years[year][i] = getEmptyMonth();
         }
       }
+      // Migration: ensure ruecklage field exists
       for (let i = 0; i < 12; i++) {
         if (state.years[year][i] && state.years[year][i].ruecklage === undefined) {
           state.years[year][i].ruecklage = 0;
@@ -223,7 +228,6 @@
     function calculateYearStats(yearData) {
       let stats = { totalRevenue: 0, totalCost: 0, totalCosts: 0, totalUnits: 0, returnsAmount: 0, ruecklage: 0 };
       let costsByCategory = {};
-      
       for (let i = 0; i < 12; i++) {
         const m = yearData[i];
         if (m) {
@@ -234,7 +238,6 @@
           stats.totalUnits += ms.totalUnits;
           stats.returnsAmount += ms.returnsAmount;
           stats.ruecklage += ms.ruecklage || 0;
-          
           Object.entries(ms.costsByCategory).forEach(([cat, amount]) => {
             if (!costsByCategory[cat]) costsByCategory[cat] = 0;
             costsByCategory[cat] += amount;
@@ -325,7 +328,7 @@
       saveData();
       render();
     }
-    
+
     // ===== RÜCKLAGE =====
     function updateRuecklage(value) {
       const monthData = state.years[state.selectedYear][state.selectedMonth];
@@ -373,9 +376,11 @@
           const monthData = state.years[state.selectedYear][state.selectedMonth];
           
           rows.forEach(row => {
+            // Spalten: Variantentitel, Produkttitel, Gesamtumsatz, Netto verkaufte Artikel, Kosten der verkauften Waren
             let variante = row['Variantentitel'] || row['Variante'] || '';
             let produkt = row['Produkttitel'] || row['Produkt'] || row['Titel'] || '';
             
+            // Default Title durch Produkttitel ersetzen
             if (variante === 'Default Title' && produkt) {
               variante = produkt;
             }
@@ -428,6 +433,7 @@
           fullText += textContent.items.map(item => item.str).join(' ') + '\n';
         }
         
+        // Betrag extrahieren
         const amountPatterns = [
           /(?:Gesamt|Total|Summe|Betrag|Rechnungsbetrag|Amount)[\s:]*(?:€|EUR|USD|\$)?\s*([\d.,]+)/i,
           /(?:€|EUR)\s*([\d.,]+)/i,
@@ -448,6 +454,7 @@
           }
         }
         
+        // Währungsumrechnung wenn nötig
         let exchangeRate = 1;
         let originalAmount = amount;
         if (currency !== 'EUR' && amount > 0) {
@@ -461,6 +468,7 @@
           }
         }
         
+        // Datum extrahieren
         const datePatterns = [
           /(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})/,
           /(\d{4})[./-](\d{1,2})[./-](\d{1,2})/
@@ -480,13 +488,28 @@
           }
         }
         
+        // Lieferant erkennen
         const knownSuppliers = {
-          'amazon': 'Amazon', 'dhl': 'DHL', 'hermes': 'Hermes', 'ups': 'UPS',
-          'fedex': 'FedEx', 'office': 'Office Depot', 'staples': 'Staples',
-          'google': 'Google', 'meta': 'Meta', 'facebook': 'Facebook',
-          'microsoft': 'Microsoft', 'adobe': 'Adobe', 'canva': 'Canva',
-          'shopify': 'Shopify', 'stripe': 'Stripe', 'paypal': 'PayPal',
-          'klarna': 'Klarna', 'mollie': 'Mollie', 'dpd': 'DPD', 'gls': 'GLS'
+          'amazon': 'Amazon',
+          'dhl': 'DHL',
+          'hermes': 'Hermes',
+          'ups': 'UPS',
+          'fedex': 'FedEx',
+          'office': 'Office Depot',
+          'staples': 'Staples',
+          'google': 'Google',
+          'meta': 'Meta',
+          'facebook': 'Facebook',
+          'microsoft': 'Microsoft',
+          'adobe': 'Adobe',
+          'canva': 'Canva',
+          'shopify': 'Shopify',
+          'stripe': 'Stripe',
+          'paypal': 'PayPal',
+          'klarna': 'Klarna',
+          'mollie': 'Mollie',
+          'dpd': 'DPD',
+          'gls': 'GLS'
         };
         
         let supplier = 'Unbekannt';
@@ -498,6 +521,7 @@
           }
         }
         
+        // Kategorie erkennen
         const categoryKeywords = {
           waren: ['produkt', 'artikel', 'ware', 'bestellung', 'order'],
           verpackung: ['verpackung', 'karton', 'packaging', 'box'],
@@ -541,7 +565,13 @@
     
     function confirmPdfImport() {
       if (!state.pdfResult || state.pdfResult.error) return;
-      addCost(state.pdfSelectedCategory, state.pdfResult.lieferant, state.pdfResult.brutto);
+      
+      addCost(
+        state.pdfSelectedCategory,
+        state.pdfResult.lieferant,
+        state.pdfResult.brutto
+      );
+      
       state.pdfResult = null;
       state.pdfSelectedCategory = 'sonstiges';
       render();
@@ -587,11 +617,23 @@
       return `
         <div class="min-h-screen flex items-center justify-center p-4">
           <div class="bg-slate-900 rounded-2xl p-8 max-w-md w-full border border-slate-700 text-center">
-            <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-3xl mx-auto mb-4">🛒</div>
+            <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-3xl mx-auto mb-4">
+              🛒
+            </div>
             <h1 class="text-2xl font-bold mb-2">ahhoi-eCom Shops</h1>
             <p class="text-slate-400 mb-6">GuV Manager - Bitte Passwort eingeben</p>
-            <input type="password" id="passwordInput" placeholder="Passwort" class="w-full bg-slate-800 rounded-lg px-4 py-3 text-center text-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 mb-4" onkeypress="if(event.key === 'Enter') checkPassword()" />
-            <button onclick="checkPassword()" class="w-full py-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 transition-colors font-medium text-lg">Anmelden</button>
+            
+            <input 
+              type="password" 
+              id="passwordInput" 
+              placeholder="Passwort" 
+              class="w-full bg-slate-800 rounded-lg px-4 py-3 text-center text-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 mb-4"
+              onkeypress="if(event.key === 'Enter') checkPassword()"
+            />
+            
+            <button onclick="checkPassword()" class="w-full py-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 transition-colors font-medium text-lg">
+              Anmelden
+            </button>
           </div>
         </div>
       `;
@@ -616,7 +658,9 @@
           <div class="max-w-7xl mx-auto px-4 py-4">
             <div class="flex items-center justify-between">
               <div class="flex items-center gap-4">
-                <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-xl">🛒</div>
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-xl">
+                  🛒
+                </div>
                 <div>
                   <h1 class="font-bold text-lg">ahhoi-eCom Shops</h1>
                   <p class="text-sm text-slate-400">GuV Manager</p>
@@ -629,11 +673,18 @@
                     `<option value="${y}" ${y === state.selectedYear ? 'selected' : ''}>${y}</option>`
                   ).join('')}
                 </select>
-                <button onclick="state.showDashboard = !state.showDashboard; render()" class="p-2 rounded-lg ${state.showDashboard ? 'bg-emerald-600' : 'bg-slate-800 hover:bg-slate-700'} transition-colors" title="Dashboard">📊</button>
-                <button onclick="state.showSettings = !state.showSettings; render()" class="p-2 rounded-lg ${state.showSettings ? 'bg-emerald-600' : 'bg-slate-800 hover:bg-slate-700'} transition-colors" title="Einstellungen">⚙️</button>
+                
+                <button onclick="state.showDashboard = !state.showDashboard; render()" class="p-2 rounded-lg ${state.showDashboard ? 'bg-emerald-600' : 'bg-slate-800 hover:bg-slate-700'} transition-colors" title="Dashboard">
+                  📊
+                </button>
+                
+                <button onclick="state.showSettings = !state.showSettings; render()" class="p-2 rounded-lg ${state.showSettings ? 'bg-emerald-600' : 'bg-slate-800 hover:bg-slate-700'} transition-colors" title="Einstellungen">
+                  ⚙️
+                </button>
               </div>
             </div>
             
+            <!-- Year Summary -->
             <div class="grid grid-cols-4 gap-4 mt-4">
               <div class="bg-slate-800/50 rounded-xl p-3">
                 <p class="text-xs text-slate-400">Umsatz ${state.selectedYear}</p>
@@ -703,8 +754,12 @@
               </div>
             </div>
             <div class="flex items-center gap-2">
-              <button onclick="document.getElementById('csvInput').click()" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm transition-colors">📄 CSV Import</button>
-              <button onclick="addProduct()" class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm transition-colors">+ Hinzufügen</button>
+              <button onclick="document.getElementById('csvInput').click()" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm transition-colors">
+                📄 CSV Import
+              </button>
+              <button onclick="addProduct()" class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm transition-colors">
+                + Hinzufügen
+              </button>
             </div>
           </div>
           
@@ -724,20 +779,52 @@
                   <div class="p-4 hover:bg-slate-800/30 transition-colors">
                     <div class="grid grid-cols-12 gap-3 items-center">
                       <div class="col-span-3">
-                        <input type="text" value="${p.variante || ''}" placeholder="Variante" onchange="updateProduct('${p.id}', 'variante', this.value)" class="w-full bg-slate-800 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500" />
-                        <input type="text" value="${p.produkt || ''}" placeholder="Produkt" onchange="updateProduct('${p.id}', 'produkt', this.value)" class="w-full bg-slate-800/50 rounded px-3 py-1.5 text-xs text-slate-400 mt-1 focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+                        <input 
+                          type="text" 
+                          value="${p.variante || ''}" 
+                          placeholder="Variante"
+                          onchange="updateProduct('${p.id}', 'variante', this.value)"
+                          class="w-full bg-slate-800 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        />
+                        <input 
+                          type="text" 
+                          value="${p.produkt || ''}" 
+                          placeholder="Produkt"
+                          onchange="updateProduct('${p.id}', 'produkt', this.value)"
+                          class="w-full bg-slate-800/50 rounded px-3 py-1.5 text-xs text-slate-400 mt-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        />
                       </div>
                       <div class="col-span-2">
                         <label class="text-xs text-slate-500">Umsatz (€)</label>
-                        <input type="number" step="0.01" value="${p.revenue || ''}" placeholder="0,00" onchange="updateProduct('${p.id}', 'revenue', this.value)" class="w-full bg-slate-800 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+                        <input 
+                          type="number" 
+                          step="0.01"
+                          value="${p.revenue || ''}" 
+                          placeholder="0,00"
+                          onchange="updateProduct('${p.id}', 'revenue', this.value)"
+                          class="w-full bg-slate-800 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        />
                       </div>
                       <div class="col-span-1">
                         <label class="text-xs text-slate-500">Menge</label>
-                        <input type="number" value="${p.units || ''}" placeholder="0" onchange="updateProduct('${p.id}', 'units', this.value)" class="w-full bg-slate-800 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+                        <input 
+                          type="number" 
+                          value="${p.units || ''}" 
+                          placeholder="0"
+                          onchange="updateProduct('${p.id}', 'units', this.value)"
+                          class="w-full bg-slate-800 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        />
                       </div>
                       <div class="col-span-2">
                         <label class="text-xs text-slate-500">Wareneinsatz (€)</label>
-                        <input type="number" step="0.01" value="${p.wareneinsatz || ''}" placeholder="0,00" onchange="updateProduct('${p.id}', 'wareneinsatz', this.value)" class="w-full bg-slate-800 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+                        <input 
+                          type="number" 
+                          step="0.01"
+                          value="${p.wareneinsatz || ''}" 
+                          placeholder="0,00"
+                          onchange="updateProduct('${p.id}', 'wareneinsatz', this.value)"
+                          class="w-full bg-slate-800 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        />
                       </div>
                       <div class="col-span-2 text-right">
                         <p class="text-xs text-slate-500">Gewinn</p>
@@ -745,7 +832,9 @@
                         <p class="text-xs text-slate-500">${margin.toFixed(1)}% Marge</p>
                       </div>
                       <div class="col-span-2 text-right">
-                        <button onclick="deleteProduct('${p.id}')" class="p-2 rounded-lg hover:bg-red-500/20 text-red-400 transition-colors">🗑️</button>
+                        <button onclick="deleteProduct('${p.id}')" class="p-2 rounded-lg hover:bg-red-500/20 text-red-400 transition-colors">
+                          🗑️
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -753,6 +842,7 @@
               }).join('')}
             </div>
             
+            <!-- Product Summary -->
             <div class="p-4 bg-slate-800/30 border-t border-slate-800">
               <div class="grid grid-cols-4 gap-4 text-center">
                 <div>
@@ -782,6 +872,7 @@
       const costs = monthData.costs || [];
       const totalCosts = costs.reduce((sum, c) => sum + (c.amount || 0), 0);
       
+      // Group by category
       const byCategory = {};
       costs.forEach(c => {
         if (!byCategory[c.category]) byCategory[c.category] = [];
@@ -799,8 +890,12 @@
               </div>
             </div>
             <div class="flex items-center gap-2">
-              <button onclick="document.getElementById('pdfInput').click()" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm transition-colors">📄 PDF Analyse</button>
-              <button onclick="addCost()" class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm transition-colors">+ Hinzufügen</button>
+              <button onclick="document.getElementById('pdfInput').click()" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm transition-colors">
+                📄 PDF Analyse
+              </button>
+              <button onclick="addCost()" class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm transition-colors">
+                + Hinzufügen
+              </button>
             </div>
           </div>
           
@@ -846,8 +941,12 @@
                 </div>
               </div>
               <div class="flex gap-2">
-                <button onclick="confirmPdfImport()" class="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm">✓ Übernehmen</button>
-                <button onclick="state.pdfResult = null; render()" class="px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-sm">✕ Abbrechen</button>
+                <button onclick="confirmPdfImport()" class="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm">
+                  ✓ Übernehmen
+                </button>
+                <button onclick="state.pdfResult = null; render()" class="px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-sm">
+                  ✕ Abbrechen
+                </button>
               </div>
             </div>
           `) : ''}
@@ -877,8 +976,21 @@
                     <div class="space-y-2 ml-6">
                       ${items.map(c => `
                         <div class="flex items-center gap-3 text-sm">
-                          <input type="text" value="${c.description || ''}" placeholder="Beschreibung" onchange="updateCost('${c.id}', 'description', this.value)" class="flex-1 bg-slate-800/50 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500" />
-                          <input type="number" step="0.01" value="${c.amount || ''}" placeholder="0,00" onchange="updateCost('${c.id}', 'amount', this.value)" class="w-24 bg-slate-800/50 rounded px-2 py-1 text-right focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+                          <input 
+                            type="text" 
+                            value="${c.description || ''}" 
+                            placeholder="Beschreibung"
+                            onchange="updateCost('${c.id}', 'description', this.value)"
+                            class="flex-1 bg-slate-800/50 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                          />
+                          <input 
+                            type="number" 
+                            step="0.01"
+                            value="${c.amount || ''}" 
+                            placeholder="0,00"
+                            onchange="updateCost('${c.id}', 'amount', this.value)"
+                            class="w-24 bg-slate-800/50 rounded px-2 py-1 text-right focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                          />
                           <span class="text-slate-500">€</span>
                           <select onchange="updateCost('${c.id}', 'category', this.value)" class="bg-slate-800/50 rounded px-2 py-1 text-xs">
                             ${Object.entries(CATEGORIES).map(([key, cat]) => 
@@ -900,6 +1012,7 @@
     
     function renderReturns(monthData) {
       const returns = monthData.returns || { amount: 0, count: 0 };
+      
       return `
         <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
           <div class="flex items-center gap-3 mb-4">
@@ -909,39 +1022,26 @@
           <div class="grid grid-cols-2 gap-4">
             <div>
               <label class="text-xs text-slate-400">Betrag (€)</label>
-              <input type="number" step="0.01" value="${returns.amount || ''}" placeholder="0,00" onchange="updateReturns('amount', this.value)" class="w-full bg-slate-800 rounded px-3 py-2 mt-1 focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+              <input 
+                type="number" 
+                step="0.01"
+                value="${returns.amount || ''}" 
+                placeholder="0,00"
+                onchange="updateReturns('amount', this.value)"
+                class="w-full bg-slate-800 rounded px-3 py-2 mt-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              />
             </div>
             <div>
               <label class="text-xs text-slate-400">Anzahl</label>
-              <input type="number" value="${returns.count || ''}" placeholder="0" onchange="updateReturns('count', this.value)" class="w-full bg-slate-800 rounded px-3 py-2 mt-1 focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+              <input 
+                type="number" 
+                value="${returns.count || ''}" 
+                placeholder="0"
+                onchange="updateReturns('count', this.value)"
+                class="w-full bg-slate-800 rounded px-3 py-2 mt-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              />
             </div>
           </div>
-        </div>
-      `;
-    }
-    
-    function renderRuecklage(monthData) {
-      const ruecklage = monthData.ruecklage || 0;
-      const stats = calculateMonthStats(monthData);
-      
-      return `
-        <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
-          <div class="flex items-center gap-3 mb-4">
-            <span class="text-xl">🏦</span>
-            <h2 class="font-semibold">Rücklage</h2>
-          </div>
-          <div>
-            <label class="text-xs text-slate-400">Monatliche Rücklage (€)</label>
-            <input type="number" step="0.01" value="${ruecklage || ''}" placeholder="0,00" onchange="updateRuecklage(this.value)" class="w-full bg-slate-800 rounded px-3 py-2 mt-1 focus:outline-none focus:ring-1 focus:ring-emerald-500" />
-          </div>
-          ${ruecklage > 0 ? `
-            <div class="mt-3 pt-3 border-t border-slate-800">
-              <div class="flex justify-between text-sm">
-                <span class="text-slate-400">Verfügbar nach Rücklage</span>
-                <span class="font-medium ${stats.netAfterReserve >= 0 ? 'text-emerald-400' : 'text-red-400'}">${formatCurrency(stats.netAfterReserve)}</span>
-              </div>
-            </div>
-          ` : ''}
         </div>
       `;
     }
@@ -999,11 +1099,10 @@
               </div>
             ` : ''}
             
-            <div class="flex justify-between text-sm">
+            <div class="flex justify-between">
               <span class="text-slate-400">- Kosten gesamt</span>
               <span class="text-red-400">${formatCurrency(stats.totalCosts)}</span>
             </div>
-            
             <div class="border-t border-slate-700 pt-3 flex justify-between">
               <span class="font-semibold">Betriebsergebnis</span>
               <span class="font-bold text-lg ${stats.netProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}">${formatCurrency(stats.netProfit)}</span>
@@ -1028,6 +1127,7 @@
       const yearData = state.years[state.selectedYear] || {};
       const yearStats = calculateYearStats(yearData);
       
+      // Monthly data for chart
       const monthlyData = MONTHS.map((month, idx) => {
         const ms = calculateMonthStats(yearData[idx] || getEmptyMonth());
         return { month: month.substr(0, 3), ...ms };
@@ -1037,7 +1137,7 @@
       const allProducts = [];
       for (let i = 0; i < 12; i++) {
         (yearData[i]?.products || []).forEach(p => {
-          allProducts.push({ ...p, monthIdx: i });
+          allProducts.push({ ...p, month: MONTHS[i] });
         });
       }
       
@@ -1053,14 +1153,16 @@
         productStats[key].wareneinsatz += p.wareneinsatz || 0;
       });
       
-      const topProducts = Object.values(productStats).sort((a, b) => b.revenue - a.revenue).slice(0, 5);
+      const topProducts = Object.values(productStats)
+        .sort((a, b) => b.revenue - a.revenue)
+        .slice(0, 5);
       
-      // Kosten nach Kategorien
+      // Cost categories
       const costsByCategory = yearStats.costsByCategory || {};
       const sortedCosts = Object.entries(costsByCategory).sort((a, b) => b[1] - a[1]);
       const totalYearCosts = yearStats.totalCosts;
       
-      // Monats-Kosten-Matrix
+      // Monthly cost breakdown
       const monthlyCostData = MONTHS.map((month, idx) => {
         const m = yearData[idx] || getEmptyMonth();
         return { month: month.substr(0, 3), costs: calculateCostsByCategory(m.costs) };
@@ -1117,7 +1219,10 @@
                         <div class="flex-1 bg-emerald-500/50 rounded-t" style="height: ${height}%"></div>
                         <div class="flex-1 ${m.netProfit >= 0 ? 'bg-blue-500/50' : 'bg-red-500/50'} rounded-t" style="height: ${profitHeight}%"></div>
                       </div>
-                      <button onclick="state.selectedMonth = ${idx}; state.showDashboard = false; render()" class="text-xs text-slate-400 mt-2 hover:text-emerald-400">${m.month}</button>
+                      <button 
+                        onclick="state.selectedMonth = ${idx}; state.showDashboard = false; render()"
+                        class="text-xs text-slate-400 mt-2 hover:text-emerald-400"
+                      >${m.month}</button>
                     </div>
                   `;
                 }).join('')}
@@ -1209,7 +1314,7 @@
               </div>
             </div>
             
-            <!-- Kosten-Matrix: Kategorie × Monat -->
+            <!-- Kosten-Matrix: Kategorie x Monat -->
             ${sortedCosts.length > 0 ? `
               <div class="bg-slate-900 rounded-xl p-4 border border-slate-800 mb-6">
                 <h3 class="font-medium mb-4">📅 Kosten pro Kategorie & Monat</h3>
@@ -1218,29 +1323,27 @@
                     <thead>
                       <tr class="border-b border-slate-700">
                         <th class="text-left py-2 px-2 text-slate-400 font-medium">Kategorie</th>
-                        ${MONTHS.map(m => `<th class="text-right py-2 px-1 text-slate-400 font-medium text-xs">${m.substr(0,3)}</th>`).join('')}
+                        ${MONTHS.map(m => '<th class="text-right py-2 px-1 text-slate-400 font-medium text-xs">' + m.substr(0,3) + '</th>').join('')}
                         <th class="text-right py-2 px-2 text-slate-400 font-medium">Gesamt</th>
                       </tr>
                     </thead>
                     <tbody>
                       ${sortedCosts.map(([cat, total]) => {
                         const catInfo = CATEGORIES[cat] || { name: cat, icon: '📋' };
-                        return `
-                          <tr class="border-b border-slate-800/50 hover:bg-slate-800/30">
-                            <td class="py-2 px-2 whitespace-nowrap">${catInfo.icon} ${catInfo.name}</td>
-                            ${monthlyCostData.map(m => {
-                              const val = m.costs[cat] || 0;
-                              return `<td class="text-right py-2 px-1 text-xs ${val > 0 ? 'text-red-400' : 'text-slate-600'}">${val > 0 ? formatCurrency(val) : '—'}</td>`;
-                            }).join('')}
-                            <td class="text-right py-2 px-2 font-medium text-red-400">${formatCurrency(total)}</td>
-                          </tr>
-                        `;
+                        return '<tr class="border-b border-slate-800/50 hover:bg-slate-800/30">' +
+                          '<td class="py-2 px-2 whitespace-nowrap">' + catInfo.icon + ' ' + catInfo.name + '</td>' +
+                          monthlyCostData.map(m => {
+                            const val = m.costs[cat] || 0;
+                            return '<td class="text-right py-2 px-1 text-xs ' + (val > 0 ? 'text-red-400' : 'text-slate-600') + '">' + (val > 0 ? formatCurrency(val) : '—') + '</td>';
+                          }).join('') +
+                          '<td class="text-right py-2 px-2 font-medium text-red-400">' + formatCurrency(total) + '</td>' +
+                        '</tr>';
                       }).join('')}
                       <tr class="border-t border-slate-600 font-medium">
                         <td class="py-2 px-2">Gesamt</td>
                         ${monthlyCostData.map(m => {
                           const monthTotal = Object.values(m.costs).reduce((s, v) => s + v, 0);
-                          return `<td class="text-right py-2 px-1 text-xs ${monthTotal > 0 ? 'text-red-400' : 'text-slate-600'}">${monthTotal > 0 ? formatCurrency(monthTotal) : '—'}</td>`;
+                          return '<td class="text-right py-2 px-1 text-xs ' + (monthTotal > 0 ? 'text-red-400' : 'text-slate-600') + '">' + (monthTotal > 0 ? formatCurrency(monthTotal) : '—') + '</td>';
                         }).join('')}
                         <td class="text-right py-2 px-2 text-red-400">${formatCurrency(totalYearCosts)}</td>
                       </tr>
@@ -1254,6 +1357,39 @@
       `;
     }
     
+    function renderRuecklage(monthData) {
+      const ruecklage = monthData.ruecklage || 0;
+      const stats = calculateMonthStats(monthData);
+      
+      return `
+        <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+          <div class="flex items-center gap-3 mb-4">
+            <span class="text-xl">🏦</span>
+            <h2 class="font-semibold">Rücklage</h2>
+          </div>
+          <div>
+            <label class="text-xs text-slate-400">Monatliche Rücklage (€)</label>
+            <input 
+              type="number" 
+              step="0.01"
+              value="${ruecklage || ''}" 
+              placeholder="0,00"
+              onchange="updateRuecklage(this.value)"
+              class="w-full bg-slate-800 rounded px-3 py-2 mt-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+            />
+          </div>
+          ${ruecklage > 0 ? `
+            <div class="mt-3 pt-3 border-t border-slate-800">
+              <div class="flex justify-between text-sm">
+                <span class="text-slate-400">Verfügbar nach Rücklage</span>
+                <span class="font-medium ${stats.netAfterReserve >= 0 ? 'text-emerald-400' : 'text-red-400'}">${formatCurrency(stats.netAfterReserve)}</span>
+              </div>
+            </div>
+          ` : ''}
+        </div>
+      `;
+    }
+    
     function renderSettings() {
       return `
         <div class="fixed inset-0 bg-slate-950/90 z-50 flex items-center justify-center p-4">
@@ -1262,23 +1398,36 @@
               <h2 class="text-xl font-bold">⚙️ Einstellungen</h2>
               <button onclick="state.showSettings = false; render()" class="p-2 rounded-lg bg-slate-800 hover:bg-slate-700">✕</button>
             </div>
+            
             <div class="space-y-4">
               <div>
                 <h3 class="font-medium mb-2">Backup & Export</h3>
                 <div class="flex gap-2">
-                  <button onclick="exportBackup()" class="flex-1 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm">💾 Backup erstellen</button>
-                  <button onclick="document.getElementById('backupInput').click()" class="flex-1 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm">📥 Backup laden</button>
+                  <button onclick="exportBackup()" class="flex-1 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm">
+                    💾 Backup erstellen
+                  </button>
+                  <button onclick="document.getElementById('backupInput').click()" class="flex-1 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm">
+                    📥 Backup laden
+                  </button>
                 </div>
               </div>
+              
               <div class="pt-4 border-t border-slate-800">
                 <h3 class="font-medium mb-2">Firebase Status</h3>
                 <p class="text-sm ${database ? 'text-emerald-400' : 'text-red-400'}">
                   ${database ? '✓ Verbunden' : '✕ Nicht verbunden'}
                 </p>
-                ${!database ? `<p class="text-xs text-slate-500 mt-1">Firebase Config in der index.html prüfen</p>` : ''}
+                ${!database ? `
+                  <p class="text-xs text-slate-500 mt-1">
+                    Firebase Config in der index.html prüfen
+                  </p>
+                ` : ''}
               </div>
+              
               <div class="pt-4 border-t border-slate-800">
-                <button onclick="if(confirm('Wirklich abmelden?')) { sessionStorage.clear(); location.reload(); }" class="w-full py-2 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 text-sm">🚪 Abmelden</button>
+                <button onclick="if(confirm('Wirklich abmelden?')) { sessionStorage.clear(); location.reload(); }" class="w-full py-2 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 text-sm">
+                  🚪 Abmelden
+                </button>
               </div>
             </div>
           </div>
@@ -1336,16 +1485,29 @@
       }
     }
     
+    // File input handlers
     document.getElementById('csvInput').addEventListener('change', (e) => {
-      if (e.target.files[0]) { importCSV(e.target.files[0]); e.target.value = ''; }
-    });
-    document.getElementById('pdfInput').addEventListener('change', (e) => {
-      if (e.target.files[0]) { analyzePDF(e.target.files[0]); e.target.value = ''; }
-    });
-    document.getElementById('backupInput').addEventListener('change', (e) => {
-      if (e.target.files[0]) { importBackup(e.target.files[0]); e.target.value = ''; }
+      if (e.target.files[0]) {
+        importCSV(e.target.files[0]);
+        e.target.value = '';
+      }
     });
     
+    document.getElementById('pdfInput').addEventListener('change', (e) => {
+      if (e.target.files[0]) {
+        analyzePDF(e.target.files[0]);
+        e.target.value = '';
+      }
+    });
+    
+    document.getElementById('backupInput').addEventListener('change', (e) => {
+      if (e.target.files[0]) {
+        importBackup(e.target.files[0]);
+        e.target.value = '';
+      }
+    });
+    
+    // Initial render
     if (state.isLoggedIn) {
       loadData();
     } else {
