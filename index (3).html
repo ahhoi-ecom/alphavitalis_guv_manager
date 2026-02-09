@@ -513,31 +513,40 @@ WICHTIG: Gib NUR das JSON zurück, keine Erklärungen. Der "lieferant" sollte de
     // ===== CSV IMPORT (Shopify) =====
     function parseCSV(text) {
       const lines = text.trim().split('\n');
-      const headers = lines[0].split(';').map(h => h.trim().replace(/^"|"$/g, ''));
+      // Auto-detect delimiter: Semikolon oder Komma
+      const firstLine = lines[0];
+      const delimiter = firstLine.includes(';') ? ';' : ',';
+      
+      // Header parsen (mit Anführungszeichen-Handling)
+      const headers = parseCSVLineGeneric(firstLine, delimiter);
       
       return lines.slice(1).map(line => {
-        const values = [];
-        let current = '';
-        let inQuotes = false;
-        
-        for (let char of line) {
-          if (char === '"') {
-            inQuotes = !inQuotes;
-          } else if (char === ';' && !inQuotes) {
-            values.push(current.trim());
-            current = '';
-          } else {
-            current += char;
-          }
-        }
-        values.push(current.trim());
-        
+        const values = parseCSVLineGeneric(line, delimiter);
         const row = {};
         headers.forEach((h, i) => {
           row[h] = values[i] || '';
         });
         return row;
       });
+    }
+    
+    function parseCSVLineGeneric(line, delimiter) {
+      const result = [];
+      let current = '';
+      let inQuotes = false;
+      
+      for (let char of line) {
+        if (char === '"') {
+          inQuotes = !inQuotes;
+        } else if (char === delimiter && !inQuotes) {
+          result.push(current.trim());
+          current = '';
+        } else {
+          current += char;
+        }
+      }
+      result.push(current.trim());
+      return result.map(s => s.replace(/^"|"$/g, '').trim());
     }
     
     async function handleCsvImport() {
