@@ -29,7 +29,6 @@
     @keyframes fadeIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
     .spinner { border: 3px solid #334155; border-top-color: #10b981; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
-    .cost-bar { transition: width 0.4s ease-out; }
   </style>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen">
@@ -54,7 +53,7 @@
 };
     
     // Passwort für die App
-    const APP_PASSWORD = "kunde2024";
+    const APP_PASSWORD = "alphavitalis123!";
     
     // Firebase initialisieren
     let database = null;
@@ -75,11 +74,9 @@
     const CATEGORIES = {
       waren: { name: 'Wareneinkauf', icon: '📦' },
       verpackung: { name: 'Verpackung', icon: '📫' },
-      zahlungsgebuehren: { name: 'Zahlungsgebühren', icon: '💳' },
-      versand: { name: 'Versand & Logistik', icon: '🚚' },
       marketing: { name: 'Marketing', icon: '📣' },
       software: { name: 'Software & Tools', icon: '💻' },
-      porto: { name: 'Porto', icon: '✉️' },
+      porto: { name: 'Porto & Versand', icon: '🚚' },
       buero: { name: 'Bürobedarf', icon: '🖊️' },
       reisen: { name: 'Reisekosten', icon: '✈️' },
       telefon: { name: 'Telefon & Internet', icon: '📱' },
@@ -87,29 +84,13 @@
       sonstiges: { name: 'Sonstiges', icon: '📋' }
     };
 
-    const CATEGORY_COLORS = {
-      waren: '#f59e0b',
-      verpackung: '#8b5cf6',
-      zahlungsgebuehren: '#ec4899',
-      versand: '#06b6d4',
-      marketing: '#f97316',
-      software: '#3b82f6',
-      porto: '#14b8a6',
-      buero: '#6366f1',
-      reisen: '#a855f7',
-      telefon: '#10b981',
-      beratung: '#eab308',
-      sonstiges: '#64748b'
-    };
-
     // ===== APP STATE =====
     const currentYear = new Date().getFullYear();
-    const currentMonth = new Date().getMonth();
     let state = {
       isLoggedIn: sessionStorage.getItem('loggedIn') === 'true',
       isLoading: true,
       selectedYear: currentYear,
-      selectedMonth: currentMonth,
+      selectedMonth: new Date().getMonth(),
       showSettings: false,
       showDashboard: false,
       expandedProducts: {},
@@ -135,7 +116,6 @@
         products: [],
         costs: [],
         returns: { amount: 0, count: 0 },
-        ruecklage: 0,
         notes: ''
       };
     }
@@ -143,23 +123,10 @@
     function ensureYearExists(year) {
       if (!state.years[year]) {
         state.years[year] = {};
-      }
-      // Always ensure all 12 months exist (Firebase may only store months with data)
-      for (let i = 0; i < 12; i++) {
-        if (!state.years[year][i]) {
+        for (let i = 0; i < 12; i++) {
           state.years[year][i] = getEmptyMonth();
         }
-        if (state.years[year][i].ruecklage === undefined) {
-          state.years[year][i].ruecklage = 0;
-        }
       }
-    }
-
-    function getMonthData(year, month) {
-      ensureYearExists(year || state.selectedYear);
-      const y = state.years[year || state.selectedYear];
-      const m = month !== undefined ? month : state.selectedMonth;
-      return (y && y[m]) ? y[m] : getEmptyMonth();
     }
 
     // ===== FIREBASE DATA SYNC =====
@@ -175,8 +142,6 @@
         const data = snapshot.val();
         if (data && data.years) {
           state.years = data.years;
-          // Ensure all loaded years have complete month data
-          Object.keys(state.years).forEach(y => ensureYearExists(y));
         }
         ensureYearExists(currentYear);
         state.isLoading = false;
@@ -205,38 +170,22 @@
       return { totalRevenue, totalCost, profit: totalRevenue - totalCost, totalUnits };
     }
     
-    function calculateCostsByCategory(costs) {
-      const byCategory = {};
-      (costs || []).forEach(c => {
-        const cat = c.category || 'sonstiges';
-        if (!byCategory[cat]) byCategory[cat] = 0;
-        byCategory[cat] += c.amount || 0;
-      });
-      return byCategory;
-    }
-    
     function calculateMonthStats(monthData) {
       const productStats = calculateProductStats(monthData.products || []);
       const totalCosts = (monthData.costs || []).reduce((sum, c) => sum + (c.amount || 0), 0);
       const returnsAmount = monthData.returns?.amount || 0;
-      const costsByCategory = calculateCostsByCategory(monthData.costs);
-      const ruecklage = monthData.ruecklage || 0;
       
       return {
         ...productStats,
         totalCosts,
-        costsByCategory,
         returnsAmount,
-        ruecklage,
         grossProfit: productStats.profit - returnsAmount,
-        netProfit: productStats.profit - returnsAmount - totalCosts,
-        netAfterReserve: productStats.profit - returnsAmount - totalCosts - ruecklage
+        netProfit: productStats.profit - returnsAmount - totalCosts
       };
     }
     
     function calculateYearStats(yearData) {
-      let stats = { totalRevenue: 0, totalCost: 0, totalCosts: 0, totalUnits: 0, returnsAmount: 0, ruecklage: 0 };
-      let costsByCategory = {};
+      let stats = { totalRevenue: 0, totalCost: 0, totalCosts: 0, totalUnits: 0, returnsAmount: 0 };
       for (let i = 0; i < 12; i++) {
         const m = yearData[i];
         if (m) {
@@ -246,25 +195,18 @@
           stats.totalCosts += ms.totalCosts;
           stats.totalUnits += ms.totalUnits;
           stats.returnsAmount += ms.returnsAmount;
-          stats.ruecklage += ms.ruecklage || 0;
-          Object.entries(ms.costsByCategory).forEach(([cat, amount]) => {
-            if (!costsByCategory[cat]) costsByCategory[cat] = 0;
-            costsByCategory[cat] += amount;
-          });
         }
       }
-      stats.costsByCategory = costsByCategory;
       stats.profit = stats.totalRevenue - stats.totalCost;
       stats.grossProfit = stats.profit - stats.returnsAmount;
       stats.netProfit = stats.grossProfit - stats.totalCosts;
-      stats.netAfterReserve = stats.netProfit - stats.ruecklage;
       return stats;
     }
 
     // ===== PRODUCT FUNCTIONS =====
     function addProduct() {
       ensureYearExists(state.selectedYear);
-      const monthData = getMonthData();
+      const monthData = state.years[state.selectedYear][state.selectedMonth];
       monthData.products.push({
         id: generateId(),
         variante: '',
@@ -278,7 +220,7 @@
     }
     
     function updateProduct(id, field, value) {
-      const monthData = getMonthData();
+      const monthData = state.years[state.selectedYear][state.selectedMonth];
       const product = monthData.products.find(p => p.id === id);
       if (product) {
         if (field === 'revenue' || field === 'units' || field === 'wareneinsatz') {
@@ -292,7 +234,7 @@
     }
     
     function deleteProduct(id) {
-      const monthData = getMonthData();
+      const monthData = state.years[state.selectedYear][state.selectedMonth];
       monthData.products = monthData.products.filter(p => p.id !== id);
       saveData();
       render();
@@ -301,7 +243,7 @@
     // ===== COST FUNCTIONS =====
     function addCost(category = 'sonstiges', description = '', amount = 0) {
       ensureYearExists(state.selectedYear);
-      const monthData = getMonthData();
+      const monthData = state.years[state.selectedYear][state.selectedMonth];
       monthData.costs.push({
         id: generateId(),
         category,
@@ -314,7 +256,7 @@
     }
     
     function updateCost(id, field, value) {
-      const monthData = getMonthData();
+      const monthData = state.years[state.selectedYear][state.selectedMonth];
       const cost = monthData.costs.find(c => c.id === id);
       if (cost) {
         cost[field] = field === 'amount' ? (parseFloat(value) || 0) : value;
@@ -324,7 +266,7 @@
     }
     
     function deleteCost(id) {
-      const monthData = getMonthData();
+      const monthData = state.years[state.selectedYear][state.selectedMonth];
       monthData.costs = monthData.costs.filter(c => c.id !== id);
       saveData();
       render();
@@ -332,16 +274,8 @@
 
     // ===== RETURNS =====
     function updateReturns(field, value) {
-      const monthData = getMonthData();
+      const monthData = state.years[state.selectedYear][state.selectedMonth];
       monthData.returns[field] = parseFloat(value) || 0;
-      saveData();
-      render();
-    }
-
-    // ===== RÜCKLAGE =====
-    function updateRuecklage(value) {
-      const monthData = getMonthData();
-      monthData.ruecklage = parseFloat(value) || 0;
       saveData();
       render();
     }
@@ -382,7 +316,7 @@
         try {
           const rows = parseCSV(e.target.result);
           ensureYearExists(state.selectedYear);
-          const monthData = getMonthData();
+          const monthData = state.years[state.selectedYear][state.selectedMonth];
           
           rows.forEach(row => {
             // Spalten: Variantentitel, Produkttitel, Gesamtumsatz, Netto verkaufte Artikel, Kosten der verkauften Waren
@@ -512,13 +446,7 @@
           'microsoft': 'Microsoft',
           'adobe': 'Adobe',
           'canva': 'Canva',
-          'shopify': 'Shopify',
-          'stripe': 'Stripe',
-          'paypal': 'PayPal',
-          'klarna': 'Klarna',
-          'mollie': 'Mollie',
-          'dpd': 'DPD',
-          'gls': 'GLS'
+          'shopify': 'Shopify'
         };
         
         let supplier = 'Unbekannt';
@@ -534,11 +462,9 @@
         const categoryKeywords = {
           waren: ['produkt', 'artikel', 'ware', 'bestellung', 'order'],
           verpackung: ['verpackung', 'karton', 'packaging', 'box'],
-          zahlungsgebuehren: ['payment', 'zahlung', 'gebühr', 'transaction', 'stripe', 'paypal', 'klarna', 'mollie'],
-          versand: ['versand', 'shipping', 'logistik', 'fulfillment', 'dhl', 'hermes', 'ups', 'dpd', 'gls'],
           marketing: ['marketing', 'werbung', 'ads', 'anzeige', 'kampagne'],
-          software: ['software', 'lizenz', 'subscription', 'saas', 'app', 'shopify'],
-          porto: ['porto', 'briefmarke', 'einschreiben'],
+          software: ['software', 'lizenz', 'subscription', 'saas', 'app'],
+          porto: ['porto', 'versand', 'shipping', 'dhl', 'hermes', 'ups'],
           buero: ['büro', 'office', 'papier', 'toner', 'drucker'],
           reisen: ['reise', 'flug', 'hotel', 'bahn', 'travel'],
           telefon: ['telefon', 'handy', 'internet', 'mobilfunk'],
@@ -725,11 +651,10 @@
               ${MONTHS.map((month, idx) => {
                 const monthData = state.years[state.selectedYear]?.[idx];
                 const hasData = monthData && (monthData.products?.length > 0 || monthData.costs?.length > 0);
-                const isCurrent = idx === currentMonth && state.selectedYear === currentYear;
                 return `
                   <button 
                     onclick="state.selectedMonth = ${idx}; render()"
-                    class="px-4 py-2 rounded-lg text-sm whitespace-nowrap transition-colors relative ${
+                    class="px-4 py-2 rounded-lg text-sm whitespace-nowrap transition-colors ${
                       idx === state.selectedMonth 
                         ? 'bg-emerald-600 text-white' 
                         : hasData 
@@ -738,7 +663,6 @@
                     }"
                   >
                     ${month.substr(0, 3)}
-                    ${isCurrent && idx !== state.selectedMonth ? '<span class="absolute -top-1 -right-1 w-2 h-2 bg-emerald-400 rounded-full"></span>' : ''}
                   </button>
                 `;
               }).join('')}
@@ -1057,8 +981,6 @@
     
     function renderSummary(monthData) {
       const stats = calculateMonthStats(monthData);
-      const costsByCategory = stats.costsByCategory;
-      const hasCosts = Object.keys(costsByCategory).length > 0;
       
       return `
         <div class="bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl border border-slate-700 p-6">
@@ -1081,52 +1003,14 @@
               <span class="text-slate-300">= Rohgewinn</span>
               <span class="font-medium ${stats.grossProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}">${formatCurrency(stats.grossProfit)}</span>
             </div>
-            
-            ${hasCosts ? `
-              <div class="border-t border-slate-700 pt-3">
-                <p class="text-xs text-slate-500 uppercase tracking-wider mb-2">Kostenaufschlüsselung</p>
-                <div class="space-y-2">
-                  ${Object.entries(costsByCategory)
-                    .sort((a, b) => b[1] - a[1])
-                    .map(([cat, amount]) => {
-                      const catInfo = CATEGORIES[cat] || { name: cat, icon: '📋' };
-                      const pct = stats.totalCosts > 0 ? (amount / stats.totalCosts * 100) : 0;
-                      const color = CATEGORY_COLORS[cat] || '#64748b';
-                      return `
-                        <div>
-                          <div class="flex justify-between text-sm mb-1">
-                            <span class="text-slate-400">${catInfo.icon} ${catInfo.name}</span>
-                            <span class="text-red-400">${formatCurrency(amount)}</span>
-                          </div>
-                          <div class="h-1.5 bg-slate-700 rounded-full overflow-hidden">
-                            <div class="h-full rounded-full cost-bar" style="width: ${pct}%; background: ${color}"></div>
-                          </div>
-                        </div>
-                      `;
-                    }).join('')}
-                </div>
-              </div>
-            ` : ''}
-            
             <div class="flex justify-between">
-              <span class="text-slate-400">- Kosten gesamt</span>
+              <span class="text-slate-400">- Kosten</span>
               <span class="text-red-400">${formatCurrency(stats.totalCosts)}</span>
             </div>
             <div class="border-t border-slate-700 pt-3 flex justify-between">
               <span class="font-semibold">Betriebsergebnis</span>
               <span class="font-bold text-lg ${stats.netProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}">${formatCurrency(stats.netProfit)}</span>
             </div>
-            
-            ${stats.ruecklage > 0 ? `
-              <div class="flex justify-between text-sm">
-                <span class="text-slate-400">- Rücklage</span>
-                <span class="text-blue-400">${formatCurrency(stats.ruecklage)}</span>
-              </div>
-              <div class="border-t border-slate-700 pt-3 flex justify-between">
-                <span class="font-semibold">Verfügbar</span>
-                <span class="font-bold ${stats.netAfterReserve >= 0 ? 'text-emerald-400' : 'text-red-400'}">${formatCurrency(stats.netAfterReserve)}</span>
-              </div>
-            ` : ''}
           </div>
         </div>
       `;
@@ -1142,7 +1026,7 @@
         return { month: month.substr(0, 3), ...ms };
       });
       
-      // Top 5 Varianten
+      // Top products
       const allProducts = [];
       for (let i = 0; i < 12; i++) {
         (yearData[i]?.products || []).forEach(p => {
@@ -1154,39 +1038,27 @@
       allProducts.forEach(p => {
         const key = p.variante || p.produkt || 'Unbekannt';
         if (!productStats[key]) {
-          productStats[key] = { name: key, revenue: 0, profit: 0, units: 0, wareneinsatz: 0 };
+          productStats[key] = { name: key, revenue: 0, profit: 0, units: 0 };
         }
         productStats[key].revenue += p.revenue || 0;
         productStats[key].profit += (p.revenue || 0) - (p.wareneinsatz || 0);
         productStats[key].units += p.units || 0;
-        productStats[key].wareneinsatz += p.wareneinsatz || 0;
       });
       
       const topProducts = Object.values(productStats)
         .sort((a, b) => b.revenue - a.revenue)
-        .slice(0, 5);
-      
-      // Cost categories
-      const costsByCategory = yearStats.costsByCategory || {};
-      const sortedCosts = Object.entries(costsByCategory).sort((a, b) => b[1] - a[1]);
-      const totalYearCosts = yearStats.totalCosts;
-      
-      // Monthly cost breakdown
-      const monthlyCostData = MONTHS.map((month, idx) => {
-        const m = yearData[idx] || getEmptyMonth();
-        return { month: month.substr(0, 3), costs: calculateCostsByCategory(m.costs) };
-      });
+        .slice(0, 10);
       
       return `
         <div class="fixed inset-0 bg-slate-950/90 z-50 overflow-auto">
-          <div class="max-w-7xl mx-auto p-6">
+          <div class="max-w-6xl mx-auto p-6">
             <div class="flex items-center justify-between mb-6">
-              <h1 class="text-2xl font-bold">📊 Jahresübersicht ${state.selectedYear}</h1>
+              <h1 class="text-2xl font-bold">📊 Dashboard ${state.selectedYear}</h1>
               <button onclick="state.showDashboard = false; render()" class="p-2 rounded-lg bg-slate-800 hover:bg-slate-700">✕</button>
             </div>
             
             <!-- Year Stats -->
-            <div class="grid grid-cols-6 gap-4 mb-6">
+            <div class="grid grid-cols-5 gap-4 mb-6">
               <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
                 <p class="text-xs text-slate-400">Umsatz</p>
                 <p class="text-2xl font-bold text-emerald-400">${formatCurrency(yearStats.totalRevenue)}</p>
@@ -1206,10 +1078,6 @@
               <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
                 <p class="text-xs text-slate-400">Gewinn</p>
                 <p class="text-2xl font-bold ${yearStats.netProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}">${formatCurrency(yearStats.netProfit)}</p>
-              </div>
-              <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
-                <p class="text-xs text-slate-400">Rücklagen</p>
-                <p class="text-2xl font-bold text-blue-400">${formatCurrency(yearStats.ruecklage)}</p>
               </div>
             </div>
             
@@ -1243,158 +1111,37 @@
               </div>
             </div>
             
-            <div class="grid grid-cols-2 gap-6 mb-6">
-              <!-- Top 5 Varianten -->
-              <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
-                <h3 class="font-medium mb-4">🏆 Top 5 Varianten</h3>
-                ${topProducts.length === 0 ? `
-                  <p class="text-slate-500 text-center py-4">Noch keine Produktdaten</p>
-                ` : `
-                  <div class="space-y-3">
-                    ${topProducts.map((p, idx) => {
-                      const maxRev = topProducts[0].revenue || 1;
-                      const width = (p.revenue / maxRev) * 100;
-                      const margin = p.revenue > 0 ? (p.profit / p.revenue * 100) : 0;
-                      const medals = ['🥇', '🥈', '🥉', '4.', '5.'];
-                      
-                      return `
-                        <div class="bg-slate-800/50 rounded-lg p-3">
-                          <div class="flex items-start gap-3">
-                            <span class="text-lg mt-0.5">${medals[idx]}</span>
-                            <div class="flex-1 min-w-0">
-                              <div class="flex justify-between items-start mb-1">
-                                <span class="text-sm font-medium truncate mr-2">${p.name}</span>
-                                <span class="text-emerald-400 font-bold whitespace-nowrap">${formatCurrency(p.revenue)}</span>
-                              </div>
-                              <div class="h-2 bg-slate-700 rounded-full overflow-hidden mb-2">
-                                <div class="h-full bg-emerald-500/60 rounded-full cost-bar" style="width: ${width}%"></div>
-                              </div>
-                              <div class="flex gap-4 text-xs text-slate-400">
-                                <span>${p.units} Stk</span>
-                                <span>WEK: ${formatCurrency(p.wareneinsatz)}</span>
-                                <span class="${margin >= 30 ? 'text-emerald-400' : margin >= 15 ? 'text-amber-400' : 'text-red-400'}">${margin.toFixed(1)}% Marge</span>
-                                <span class="${p.profit >= 0 ? 'text-emerald-400' : 'text-red-400'}">Gewinn: ${formatCurrency(p.profit)}</span>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      `;
-                    }).join('')}
-                  </div>
-                `}
-              </div>
-              
-              <!-- Kostenübersicht nach Kategorien -->
-              <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
-                <h3 class="font-medium mb-4">💰 Kosten nach Kategorien (${state.selectedYear})</h3>
-                ${sortedCosts.length === 0 ? `
-                  <p class="text-slate-500 text-center py-4">Noch keine Kostendaten</p>
-                ` : `
-                  <div class="space-y-3">
-                    ${sortedCosts.map(([cat, amount]) => {
-                      const catInfo = CATEGORIES[cat] || { name: cat, icon: '📋' };
-                      const pct = totalYearCosts > 0 ? (amount / totalYearCosts * 100) : 0;
-                      const color = CATEGORY_COLORS[cat] || '#64748b';
-                      const maxCat = sortedCosts[0]?.[1] || 1;
-                      const barWidth = (amount / maxCat) * 100;
-                      
-                      return `
-                        <div>
+            <!-- Top Products -->
+            <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
+              <h3 class="font-medium mb-4">Top 10 Produkte</h3>
+              ${topProducts.length === 0 ? `
+                <p class="text-slate-500 text-center py-4">Noch keine Produktdaten</p>
+              ` : `
+                <div class="space-y-2">
+                  ${topProducts.map((p, idx) => {
+                    const maxRev = topProducts[0].revenue || 1;
+                    const width = (p.revenue / maxRev) * 100;
+                    
+                    return `
+                      <div class="flex items-center gap-3">
+                        <span class="w-6 text-right text-slate-500">${idx + 1}.</span>
+                        <div class="flex-1">
                           <div class="flex justify-between text-sm mb-1">
-                            <span class="flex items-center gap-2">
-                              <span>${catInfo.icon}</span>
-                              <span class="text-slate-300">${catInfo.name}</span>
-                              <span class="text-xs text-slate-500">${pct.toFixed(1)}%</span>
-                            </span>
-                            <span class="text-red-400 font-medium">${formatCurrency(amount)}</span>
+                            <span class="truncate max-w-xs">${p.name}</span>
+                            <span class="text-emerald-400">${formatCurrency(p.revenue)}</span>
                           </div>
-                          <div class="h-2 bg-slate-700 rounded-full overflow-hidden">
-                            <div class="h-full rounded-full cost-bar" style="width: ${barWidth}%; background: ${color}"></div>
+                          <div class="h-2 bg-slate-800 rounded-full overflow-hidden">
+                            <div class="h-full bg-emerald-500/50 rounded-full" style="width: ${width}%"></div>
                           </div>
                         </div>
-                      `;
-                    }).join('')}
-                    <div class="border-t border-slate-700 pt-3 mt-3 flex justify-between font-medium">
-                      <span>Gesamt</span>
-                      <span class="text-red-400">${formatCurrency(totalYearCosts)}</span>
-                    </div>
-                  </div>
-                `}
-              </div>
-            </div>
-            
-            <!-- Kosten-Matrix: Kategorie x Monat -->
-            ${sortedCosts.length > 0 ? `
-              <div class="bg-slate-900 rounded-xl p-4 border border-slate-800 mb-6">
-                <h3 class="font-medium mb-4">📅 Kosten pro Kategorie & Monat</h3>
-                <div class="overflow-x-auto">
-                  <table class="w-full text-sm">
-                    <thead>
-                      <tr class="border-b border-slate-700">
-                        <th class="text-left py-2 px-2 text-slate-400 font-medium">Kategorie</th>
-                        ${MONTHS.map(m => '<th class="text-right py-2 px-1 text-slate-400 font-medium text-xs">' + m.substr(0,3) + '</th>').join('')}
-                        <th class="text-right py-2 px-2 text-slate-400 font-medium">Gesamt</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      ${sortedCosts.map(([cat, total]) => {
-                        const catInfo = CATEGORIES[cat] || { name: cat, icon: '📋' };
-                        return '<tr class="border-b border-slate-800/50 hover:bg-slate-800/30">' +
-                          '<td class="py-2 px-2 whitespace-nowrap">' + catInfo.icon + ' ' + catInfo.name + '</td>' +
-                          monthlyCostData.map(m => {
-                            const val = m.costs[cat] || 0;
-                            return '<td class="text-right py-2 px-1 text-xs ' + (val > 0 ? 'text-red-400' : 'text-slate-600') + '">' + (val > 0 ? formatCurrency(val) : '—') + '</td>';
-                          }).join('') +
-                          '<td class="text-right py-2 px-2 font-medium text-red-400">' + formatCurrency(total) + '</td>' +
-                        '</tr>';
-                      }).join('')}
-                      <tr class="border-t border-slate-600 font-medium">
-                        <td class="py-2 px-2">Gesamt</td>
-                        ${monthlyCostData.map(m => {
-                          const monthTotal = Object.values(m.costs).reduce((s, v) => s + v, 0);
-                          return '<td class="text-right py-2 px-1 text-xs ' + (monthTotal > 0 ? 'text-red-400' : 'text-slate-600') + '">' + (monthTotal > 0 ? formatCurrency(monthTotal) : '—') + '</td>';
-                        }).join('')}
-                        <td class="text-right py-2 px-2 text-red-400">${formatCurrency(totalYearCosts)}</td>
-                      </tr>
-                    </tbody>
-                  </table>
+                        <span class="text-xs text-slate-500 w-16 text-right">${p.units} Stk</span>
+                      </div>
+                    `;
+                  }).join('')}
                 </div>
-              </div>
-            ` : ''}
-          </div>
-        </div>
-      `;
-    }
-    
-    function renderRuecklage(monthData) {
-      const ruecklage = monthData.ruecklage || 0;
-      const stats = calculateMonthStats(monthData);
-      
-      return `
-        <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
-          <div class="flex items-center gap-3 mb-4">
-            <span class="text-xl">🏦</span>
-            <h2 class="font-semibold">Rücklage</h2>
-          </div>
-          <div>
-            <label class="text-xs text-slate-400">Monatliche Rücklage (€)</label>
-            <input 
-              type="number" 
-              step="0.01"
-              value="${ruecklage || ''}" 
-              placeholder="0,00"
-              onchange="updateRuecklage(this.value)"
-              class="w-full bg-slate-800 rounded px-3 py-2 mt-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-            />
-          </div>
-          ${ruecklage > 0 ? `
-            <div class="mt-3 pt-3 border-t border-slate-800">
-              <div class="flex justify-between text-sm">
-                <span class="text-slate-400">Verfügbar nach Rücklage</span>
-                <span class="font-medium ${stats.netAfterReserve >= 0 ? 'text-emerald-400' : 'text-red-400'}">${formatCurrency(stats.netAfterReserve)}</span>
-              </div>
+              `}
             </div>
-          ` : ''}
+          </div>
         </div>
       `;
     }
@@ -1457,7 +1204,7 @@
       }
       
       ensureYearExists(state.selectedYear);
-      const monthData = getMonthData();
+      const monthData = state.years[state.selectedYear][state.selectedMonth];
       
       document.getElementById('app').innerHTML = `
         ${renderHeader()}
@@ -1472,7 +1219,6 @@
             <div class="space-y-6">
               ${renderSummary(monthData)}
               ${renderReturns(monthData)}
-              ${renderRuecklage(monthData)}
             </div>
           </div>
         </main>
