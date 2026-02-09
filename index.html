@@ -27,7 +27,102 @@
   <div id="app"></div>
 
   <script>
-    const { ipcRenderer } = require('electron');
+    // ===== ELECTRON / WEB FALLBACK =====
+    let ipcRenderer;
+    const isElectron = (typeof process !== 'undefined') && process.versions && process.versions.electron;
+    
+    if (isElectron) {
+      ipcRenderer = require('electron').ipcRenderer;
+    } else {
+      // Web-Version (GitHub Pages): localStorage-basierter Fallback
+      ipcRenderer = {
+        invoke: async (channel, data) => {
+          switch (channel) {
+            case 'load-data':
+              try {
+                const stored = localStorage.getItem('guv-manager-data');
+                return stored ? JSON.parse(stored) : null;
+              } catch { return null; }
+            
+            case 'save-data':
+              try {
+                localStorage.setItem('guv-manager-data', JSON.stringify(data));
+                return true;
+              } catch { return false; }
+            
+            case 'select-pdf': {
+              return new Promise((resolve) => {
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.accept = '.pdf';
+                input.onchange = async (e) => {
+                  const file = e.target.files[0];
+                  if (!file) return resolve(null);
+                  const reader = new FileReader();
+                  reader.onload = () => {
+                    const base64 = reader.result.split(',')[1];
+                    resolve({ base64, fileName: file.name });
+                  };
+                  reader.onerror = () => resolve(null);
+                  reader.readAsDataURL(file);
+                };
+                input.click();
+              });
+            }
+            
+            case 'select-csv': {
+              return new Promise((resolve) => {
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.accept = '.csv,.tsv,.txt';
+                input.onchange = async (e) => {
+                  const file = e.target.files[0];
+                  if (!file) return resolve(null);
+                  const reader = new FileReader();
+                  reader.onload = () => resolve(reader.result);
+                  reader.onerror = () => resolve(null);
+                  reader.readAsText(file);
+                };
+                input.click();
+              });
+            }
+            
+            case 'save-export': {
+              const blob = new Blob([data.content], { type: 'text/plain;charset=utf-8' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = data.filename || 'export.txt';
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+              return true;
+            }
+            
+            case 'import-backup': {
+              return new Promise((resolve) => {
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.accept = '.json';
+                input.onchange = async (e) => {
+                  const file = e.target.files[0];
+                  if (!file) return resolve(null);
+                  const reader = new FileReader();
+                  reader.onload = () => resolve(reader.result);
+                  reader.onerror = () => resolve(null);
+                  reader.readAsText(file);
+                };
+                input.click();
+              });
+            }
+            
+            default:
+              return null;
+          }
+        }
+      };
+    }
     
     // ===== KONSTANTEN =====
     const MONTHS = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
@@ -91,14 +186,12 @@
       apiKey: '',
       showApiKeyModal: false,
       showPdfModal: false,
-      showCsvModal: false,
       showSettingsModal: false,
       showPaypalHelpModal: false,
       showShopifyPaymentsHelpModal: false,
       showExportModal: false,
       pdfProcessing: false,
       pdfResult: null,
-      csvPreview: null,
       saveStatus: 'saved',
       productsCollapsed: true, // Produkte standardmäßig eingeklappt
       expandedProductId: null, // Für Retouren-Eingabe
@@ -418,86 +511,103 @@ WICHTIG: Gib NUR das JSON zurück, keine Erklärungen. Der "lieferant" sollte de
     }
     
     // ===== CSV IMPORT (Shopify) =====
+    function parseCSV(text) {
+      const lines = text.trim().split('\n');
+      const headers = lines[0].split(';').map(h => h.trim().replace(/^"|"$/g, ''));
+      
+      return lines.slice(1).map(line => {
+        const values = [];
+        let current = '';
+        let inQuotes = false;
+        
+        for (let char of line) {
+          if (char === '"') {
+            inQuotes = !inQuotes;
+          } else if (char === ';' && !inQuotes) {
+            values.push(current.trim());
+            current = '';
+          } else {
+            current += char;
+          }
+        }
+        values.push(current.trim());
+        
+        const row = {};
+        headers.forEach((h, i) => {
+          row[h] = values[i] || '';
+        });
+        return row;
+      });
+    }
+    
     async function handleCsvImport() {
       const csvContent = await ipcRenderer.invoke('select-csv');
       if (!csvContent) return;
       
       try {
-        // CSV parsen (unterstützt Komma und Semikolon als Trennzeichen)
-        const lines = csvContent.split('\n').filter(l => l.trim());
-        const delimiter = lines[0].includes(';') ? ';' : ',';
+        const rows = parseCSV(csvContent);
         
-        // Header finden
-        const headers = parseCSVLine(lines[0], delimiter).map(h => h.toLowerCase().trim());
-        
-        // Spaltenindizes finden
-        const variantenIdx = headers.findIndex(h => h.includes('variantentitel') || h.includes('variant title') || h.includes('variante'));
-        const produktIdx = headers.findIndex(h => h.includes('produkttitel') || h.includes('product title') || h.includes('produkt'));
-        const umsatzIdx = headers.findIndex(h => h.includes('gesamtumsatz') || h.includes('total sales') || h.includes('umsatz') || h.includes('total'));
-        const mengeIdx = headers.findIndex(h => h.includes('netto verkaufte artikel') || h.includes('verkaufte einheiten') || h.includes('units sold') || h.includes('menge') || h.includes('anzahl') || h.includes('quantity'));
-        
-        if (umsatzIdx === -1) {
-          alert('CSV-Format nicht erkannt. Benötigte Spalte: "Gesamtumsatz" oder "Total Sales"');
-          return;
+        // Jahr sicherstellen
+        if (!state.years[state.selectedYear]) {
+          state.years[state.selectedYear] = createYearData();
         }
+        const monthData = state.years[state.selectedYear][state.selectedMonth] || createDefaultMonthData();
         
-        // Daten parsen
-        const products = [];
-        for (let i = 1; i < lines.length; i++) {
-          const cols = parseCSVLine(lines[i], delimiter);
-          if (cols.length <= umsatzIdx) continue;
+        rows.forEach(row => {
+          // Spalten: Variantentitel, Produkttitel, Gesamtumsatz, Netto verkaufte Artikel, Kosten der verkauften Waren
+          let variante = row['Variantentitel'] || row['Variante'] || '';
+          let produkt = row['Produkttitel'] || row['Produkt'] || row['Titel'] || '';
           
-          const variante = variantenIdx >= 0 ? cols[variantenIdx]?.trim() : '';
-          const produkt = produktIdx >= 0 ? cols[produktIdx]?.trim() : '';
-          const umsatzRaw = cols[umsatzIdx]?.trim() || '0';
-          const mengeRaw = mengeIdx >= 0 ? cols[mengeIdx]?.trim() : '1';
+          // Default Title durch Produkttitel ersetzen
+          if (variante === 'Default Title' && produkt) {
+            variante = produkt;
+          }
           
-          // Umsatz parsen - deutsches und englisches Format unterstützen
-          const umsatz = parseGermanNumber(umsatzRaw);
-          const menge = parseInt(mengeRaw.replace(/[^\d]/g, '')) || 1;
+          const revenueStr = row['Gesamtumsatz'] || row['Umsatz'] || row['Bruttoumsatz'] || '0';
+          const revenue = parseFloat(revenueStr.replace(/[^\d,.-]/g, '').replace(',', '.')) || 0;
           
-          if (umsatz > 0 || variante || produkt) {
+          const unitsStr = row['Netto verkaufte Artikel'] || row['Menge'] || row['Anzahl'] || '0';
+          const units = parseInt(unitsStr) || 0;
+          
+          const wareneinsatzStr = row['Kosten der verkauften Waren'] || row['Wareneinsatz'] || '0';
+          const wareneinsatz = Math.abs(parseFloat(wareneinsatzStr.replace(/[^\d,.-]/g, '').replace(',', '.')) || 0);
+          
+          if ((variante || produkt) && (revenue > 0 || units > 0)) {
             // Produktname zusammensetzen
             let name = '';
-            if (produkt && variante) {
+            if (produkt && variante && produkt !== variante) {
               name = `${produkt} - ${variante}`;
-            } else if (produkt) {
-              name = produkt;
             } else if (variante) {
               name = variante;
             } else {
-              name = `Produkt ${i}`;
+              name = produkt;
             }
             
-            // EK automatisch zuweisen basierend auf Variante (pro Stück)
-            const ekProStueck = getEkForVariante(variante);
+            // EK pro Stück berechnen aus Wareneinsatz
+            const ekProStueck = units > 0 ? wareneinsatz / units : 0;
             
-            products.push({
-              id: Date.now() + i,
+            monthData.products.push({
+              id: Date.now() + Math.random(),
               name: name,
-              variante: variante,
-              quantity: menge,
-              vkBrutto: umsatz, // Gesamtumsatz brutto
-              ek: ekProStueck, // EK pro Stück (netto)
-              umsatzBrutto: umsatz
+              quantity: units,
+              vkBrutto: revenue,
+              ek: Math.round(ekProStueck * 100) / 100,
+              retourenAnzahl: 0,
+              retourenBrutto: 0
             });
           }
-        }
+        });
         
-        // Nach Umsatz sortieren (höchster zuerst)
-        products.sort((a, b) => b.umsatzBrutto - a.umsatzBrutto);
-        
-        // Preview anzeigen
-        state.csvPreview = products;
-        state.showCsvModal = true;
-        render();
-        
+        state.years[state.selectedYear][state.selectedMonth] = monthData;
+        saveData();
+        alert(`${rows.length} Produkte importiert!`);
       } catch (err) {
-        alert('Fehler beim Lesen der CSV: ' + err.message);
+        alert('Fehler beim Import: ' + err.message);
       }
     }
     
-    // CSV-Zeile parsen (berücksichtigt Anführungszeichen)
+    // ===== CSV HILFSFUNKTIONEN =====
+    // CSV-Zeile parsen (berücksichtigt Anführungszeichen, flexibler Delimiter)
     function parseCSVLine(line, delimiter) {
       const result = [];
       let current = '';
@@ -521,71 +631,20 @@ WICHTIG: Gib NUR das JSON zurück, keine Erklärungen. Der "lieferant" sollte de
     // Deutsche Zahlen parsen (z.B. "1.234,56 €" → 1234.56)
     function parseGermanNumber(str) {
       if (!str) return 0;
-      
-      // Währungssymbole und Leerzeichen entfernen
       let cleaned = str.replace(/[€$\s]/g, '').trim();
-      
       if (!cleaned) return 0;
-      
-      // Prüfen ob deutsches Format (Komma als Dezimaltrennzeichen)
       const hasComma = cleaned.includes(',');
       const hasDot = cleaned.includes('.');
-      
       if (hasComma && hasDot) {
-        // Beide vorhanden - Position bestimmt das Format
-        const lastComma = cleaned.lastIndexOf(',');
-        const lastDot = cleaned.lastIndexOf('.');
-        
-        if (lastComma > lastDot) {
-          // Deutsches Format: 1.234,56 → Punkt ist Tausender, Komma ist Dezimal
+        if (cleaned.lastIndexOf(',') > cleaned.lastIndexOf('.')) {
           cleaned = cleaned.replace(/\./g, '').replace(',', '.');
         } else {
-          // Englisches Format: 1,234.56 → Komma ist Tausender
           cleaned = cleaned.replace(/,/g, '');
         }
       } else if (hasComma) {
-        // Nur Komma → deutsches Dezimaltrennzeichen: 751,77
         cleaned = cleaned.replace(',', '.');
       }
-      // Nur Punkt → englisches Format, lassen wie es ist
-      
       return parseFloat(cleaned) || 0;
-    }
-    
-    // EK für Variante ermitteln
-    function getEkForVariante(variante) {
-      if (!variante) return 0;
-      const lower = variante.toLowerCase();
-      
-      for (const [key, value] of Object.entries(state.ekPresets)) {
-        if (lower.includes(key.toLowerCase())) {
-          return value;
-        }
-      }
-      return 0; // Kein Standard-EK gefunden
-    }
-    
-    // CSV-Import anwenden
-    function applyCsvImport() {
-      if (!state.csvPreview || state.csvPreview.length === 0) return;
-      
-      const monthData = state.years[state.selectedYear]?.[state.selectedMonth] || createDefaultMonthData();
-      
-      // Produkte überschreiben mit CSV-Daten (mit Retouren-Feldern)
-      monthData.products = state.csvPreview.map(p => ({
-        id: p.id,
-        name: p.name,
-        quantity: p.quantity, // Verkaufte Einheiten
-        vkBrutto: p.umsatzBrutto, // Gesamtumsatz brutto
-        ek: p.ek, // EK pro Stück (netto)
-        retourenAnzahl: 0,
-        retourenBrutto: 0
-      }));
-      
-      state.years[state.selectedYear][state.selectedMonth] = monthData;
-      state.showCsvModal = false;
-      state.csvPreview = null;
-      saveData();
     }
     
     // ===== PAYPAL CSV IMPORT =====
@@ -941,7 +1000,6 @@ Keine weiteren Erklärungen.`
         </div>
         
         ${state.showPdfModal ? renderPdfModal() : ''}
-        ${state.showCsvModal ? renderCsvModal() : ''}
         ${state.showApiKeyModal ? renderApiKeyModal() : ''}
         ${state.showSettingsModal ? renderSettingsModal() : ''}
         ${state.showPaypalHelpModal ? renderPaypalHelpModal() : ''}
@@ -1879,87 +1937,6 @@ Keine weiteren Erklärungen.`
       `;
     }
     
-    function renderCsvModal() {
-      const preview = state.csvPreview || [];
-      const totalUmsatz = preview.reduce((s, p) => s + p.umsatzBrutto, 0);
-      const totalWareneinsatz = preview.reduce((s, p) => s + (p.quantity * p.ek), 0);
-      const productsWithEk = preview.filter(p => p.ek > 0).length;
-      
-      return `
-        <div class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 no-drag">
-          <div class="bg-slate-900 rounded-2xl p-6 max-w-3xl w-full border border-slate-700 fade-in max-h-[90vh] overflow-hidden flex flex-col">
-            <div class="flex justify-between items-center mb-4">
-              <h3 class="text-lg font-semibold">📊 Shopify CSV Import</h3>
-              <button onclick="state.showCsvModal = false; state.csvPreview = null; render();" class="p-1 hover:bg-slate-800 rounded">✕</button>
-            </div>
-            
-            <div class="mb-4 grid grid-cols-4 gap-4">
-              <div class="bg-slate-800 rounded-lg p-3">
-                <p class="text-xs text-slate-500">Produkte</p>
-                <p class="text-lg font-semibold">${preview.length}</p>
-              </div>
-              <div class="bg-slate-800 rounded-lg p-3">
-                <p class="text-xs text-slate-500">Umsatz (brutto)</p>
-                <p class="text-lg font-semibold text-emerald-400">${formatCurrency(totalUmsatz)}</p>
-              </div>
-              <div class="bg-slate-800 rounded-lg p-3">
-                <p class="text-xs text-slate-500">Wareneinsatz</p>
-                <p class="text-lg font-semibold text-amber-400">${formatCurrency(totalWareneinsatz)}</p>
-              </div>
-              <div class="bg-slate-800 rounded-lg p-3">
-                <p class="text-xs text-slate-500">Mit EK erkannt</p>
-                <p class="text-lg font-semibold">${productsWithEk} / ${preview.length}</p>
-              </div>
-            </div>
-            
-            <p class="text-sm text-slate-400 mb-2">Vorschau (sortiert nach Umsatz):</p>
-            
-            <div class="flex-1 overflow-y-auto mb-4 bg-slate-800/50 rounded-lg">
-              <table class="w-full text-sm">
-                <thead class="sticky top-0 bg-slate-800">
-                  <tr class="text-slate-500 text-xs">
-                    <th class="text-left py-2 px-3">#</th>
-                    <th class="text-left py-2 px-3">Produkt</th>
-                    <th class="text-right py-2 px-3">Anzahl</th>
-                    <th class="text-right py-2 px-3">Umsatz</th>
-                    <th class="text-right py-2 px-3">EK/Stück</th>
-                    <th class="text-right py-2 px-3">Wareneinsatz</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${preview.slice(0, 50).map((p, i) => `
-                    <tr class="border-t border-slate-700/50 ${p.ek > 0 ? '' : 'text-amber-400'}">
-                      <td class="py-2 px-3 text-slate-500">${i + 1}</td>
-                      <td class="py-2 px-3">${p.name}</td>
-                      <td class="py-2 px-3 text-right">${p.quantity}</td>
-                      <td class="py-2 px-3 text-right">${formatCurrency(p.umsatzBrutto)}</td>
-                      <td class="py-2 px-3 text-right">${p.ek > 0 ? formatCurrency(p.ek) : '<span class="text-xs">—</span>'}</td>
-                      <td class="py-2 px-3 text-right text-amber-400">${p.ek > 0 ? formatCurrency(p.quantity * p.ek) : '<span class="text-xs">—</span>'}</td>
-                    </tr>
-                  `).join('')}
-                  ${preview.length > 50 ? `<tr><td colspan="6" class="py-2 px-3 text-center text-slate-500">... und ${preview.length - 50} weitere</td></tr>` : ''}
-                </tbody>
-              </table>
-            </div>
-            
-            ${productsWithEk < preview.length ? `
-              <p class="text-xs text-amber-400 mb-3">⚠️ ${preview.length - productsWithEk} Produkte ohne EK. Du kannst den EK später manuell eintragen oder in den Einstellungen neue EK-Presets hinzufügen.</p>
-            ` : ''}
-            
-            <div class="flex gap-3">
-              <button onclick="state.showCsvModal = false; state.csvPreview = null; render();" class="flex-1 py-2 px-4 rounded-lg bg-slate-800 hover:bg-slate-700 transition-colors">
-                Abbrechen
-              </button>
-              <button onclick="applyCsvImport()" class="flex-1 py-2 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-500 transition-colors font-medium">
-                Import → ${state.selectedMonth}
-              </button>
-            </div>
-            
-            <p class="text-xs text-slate-600 mt-2 text-center">Hinweis: Bestehende Produkte für ${state.selectedMonth} werden überschrieben.</p>
-          </div>
-        </div>
-      `;
-    }
     
     // ===== START =====
     loadData();
